@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pixi/
+**/venv*/
+**/.venv/
+streamer_win_env/
+voice_env/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Secrets and local config: never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data (your conversations, settings, logs)
+memory.json
+health_export.json
+*.log
+*.pid
+backend/uploads/
+live_avatar/artifacts/
+live_avatar/avtr1_storage/
+
+# Your own avatar portraits and voices (add them deliberately if you want to share)
+live_avatar/avatars/*.png
+public/avatars/
+live_avatar/reference_voices/*.ogg
+live_avatar/reference_voices/*.wav
+live_avatar/reference_voices/*.mp3
+
+# OS / editors
+.DS_Store
+.!*
+.idea/
+.vscode/
+*.swp

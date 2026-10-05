@@ -1,0 +1,22 @@
+{
+  "name": "jarvis-live-server",
+  "version": "1.0.0",
+  "description": "Jarvis Live server: voice (Gemini Live), AI agents (Claude Code, Codex, Hermes, Antigravity), live cards and the live-avatar bridge.",
+  "main": "server.js",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test --test-force-exit cards/*.test.js device/*.test.js shared/*.test.js system/*.test.js agents/*.test.js avatar/*.test.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.13.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "node-fetch": "^3.3.2",
+    "rss-parser": "^3.13.0",
+    "systeminformation": "^5.31.5",
+    "ws": "^8.20.0"
+  }
+}

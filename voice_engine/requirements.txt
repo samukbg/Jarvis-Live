@@ -1,0 +1,3 @@
+# Local speech-to-text server (voice_engine/code/realtime_stt_server.py, port 8001)
+RealtimeSTT>=0.3
+websockets>=12
