@@ -5,7 +5,7 @@ Third-party component: live_avatar/
 
 The live_avatar/ directory is a modified copy of AVTR-1 by Goodsize Inc.
 (https://github.com/avaturn-live/avtr-1) and is NOT covered by the MIT license
-above. It remains under its own licenses: see live_avatar/LICENSE.md,
+in LICENSE. It remains under its own licenses: see live_avatar/LICENSE.md,
 LICENSE-STREAMER.md and LICENSE-RENDERER.md (PolyForm Noncommercial 1.0.0),
 LICENSE-MODEL.md (AVTR-1 Community License), PATENTS.md and
 THIRD-PARTY-NOTICES.md.
