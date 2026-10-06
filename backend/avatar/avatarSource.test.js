@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { callbackUrl, createAvatarSource, lanAddress, normalizeSource } from './avatarSource.js';
 
-test('normalize: Jarvis Cloud, or your own server by URL (+ optional key)', () => {
+test('normalize: the default streamer, or your own server by URL (+ optional key)', () => {
   assert.deepEqual(normalizeSource({ mode: 'cloud', url: 'ignored' }), { mode: 'cloud', url: '', key: '' });
   assert.deepEqual(normalizeSource({ mode: 'own', url: ' 192.168.1.20:7860/ ' }), { mode: 'own', url: 'http://192.168.1.20:7860', key: '' });
   assert.deepEqual(normalizeSource({ mode: 'own', url: 'gpu.example.com/api/avatar', key: ' k ' }), { mode: 'own', url: 'https://gpu.example.com', key: 'k' });
@@ -14,7 +14,7 @@ test('normalize: Jarvis Cloud, or your own server by URL (+ optional key)', () =
   assert.throws(() => normalizeSource({ mode: 'nope' }), /mode/);
 });
 
-test('saved in the data folder, private; defaults to Jarvis Cloud', () => {
+test('saved in the data folder, private; defaults to the default streamer', () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-avatar-')), 'avatar-source.json');
   const source = createAvatarSource({ file });
   assert.deepEqual(source.get(), { mode: 'cloud', url: '', key: '' });

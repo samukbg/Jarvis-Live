@@ -174,7 +174,19 @@ const WEATHER_WORDS = words(
     'tempo|previsão|temperaturas?|umidade|humidade|graus|' +
     'clima|pronóstico|humedad|grados',
 );
-const TOMORROW = words('tomorrow|demain|amanhã|mañana');
+const TOMORROW = words('tomorrow|demain|amanhã|mañana|domani');
+const DAY_AFTER = words('day after tomorrow|après-demain|apres-demain|depois de amanhã|pasado mañana|dopodomani');
+/** The day an answer is about: 1 = tomorrow, 2 = the day after; undefined = today / now. */
+function forecastDayOf(text: string): number | undefined {
+  // The sentence that gives the (first) temperature decides; else the opening sentence.
+  const sentences = text.split(/(?<=[.!?])\s+|\n+/).filter((s) => s.trim());
+  const lead = sentences.find((s) => /-?\d+(?:\.\d+)?\s*\**\s*°/.test(s)) ?? sentences[0] ?? '';
+  for (const s of [lead, sentences[0] ?? '']) {
+    if (DAY_AFTER.test(s)) return 2;
+    if (TOMORROW.test(s.replace(DAY_AFTER, ''))) return 1;
+  }
+  return undefined;
+}
 const RANGE = /(?:between|entre|from|de)\s+(-?\d+(?:\.\d+)?)\s*°?\s*[CF]?\s*(?:and|to|et|à|a|e|y)\s+(-?\d+(?:\.\d+)?)\s*°/iu;
 
 /** The condition mentioned first describes "now"; later mentions (e.g. rain chance) don't override it. */
@@ -249,6 +261,7 @@ function detectWeather(text: string): Detected | undefined {
     precipitationChance: pop ? parseInt(pop[1], 10) : undefined,
     uvIndex: uv ? parseInt(uv[1], 10) : undefined,
     dailyForecast: tomorrow.high !== undefined || tomorrow.low !== undefined ? [{ day: 'Tomorrow', ...tomorrow }] : undefined,
+    forecastDay: forecastDayOf(text),
   });
   return { type: 'weather', data };
 }

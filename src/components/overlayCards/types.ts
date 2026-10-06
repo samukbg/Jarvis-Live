@@ -41,6 +41,10 @@ export interface WeatherData {
   sunrise?: string;
   sunset?: string;
   precipitationChance?: number;
+  /** The day the agent's answer is about: 1 = tomorrow, 2 = the day after (else today). */
+  forecastDay?: number;
+  /** 48 hours ahead, dated (live data): the hours of the day the answer is about. */
+  hourlyAhead?: Array<{ date: string; time: string; temp: number; condition?: string; conditionCode?: WeatherData['conditionCode']; pop?: number }>;
   hourlyForecast?: Array<{
     time: string;
     temp: number;
@@ -49,7 +53,11 @@ export interface WeatherData {
     pop?: number; // probability of precipitation
   }>;
   dailyForecast?: Array<{
+    date?: string; // YYYY-MM-DD (live data)
     day: string;
+    sunrise?: string;
+    sunset?: string;
+    uvIndex?: number;
     condition?: string;
     conditionCode?: WeatherData['conditionCode'];
     low?: number;

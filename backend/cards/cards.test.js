@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sameName, compact } from './util.js';
-import { wmo, compass, aqiStatus, mapForecast } from './weather.js';
+import { wmo, compass, aqiStatus, mapForecast, plausibleTemp } from './weather.js';
+import { detectSpecialContent } from './detect.generated.js';
 import { yahooSymbol, mapChart, mapQuote } from './finance.js';
 import { parseSpotify, parseLrc } from './media.js';
 import { mapChain } from './wallet.js';
@@ -127,4 +128,37 @@ test('disks: macOS uses the Data volume, not the sealed system snapshot', () => 
   ], 'darwin');
   assert.equal(disks[0].mount, '/System/Volumes/Data');
   assert.equal(disks.length, 1);
+});
+
+test('forecast mapping: dated days with their own sun/UV, and 48 hours ahead for "tomorrow"', () => {
+  const f = {
+    current: { temperature_2m: 22, is_day: 1, weather_code: 3 },
+    hourly: { time: ['2026-10-06T17:00', '2026-10-07T09:00'], temperature_2m: [22, 15], weather_code: [3, 61], precipitation_probability: [10, 60], is_day: [1, 1] },
+    daily: { time: ['2026-10-06', '2026-10-07'], weather_code: [3, 61], temperature_2m_max: [24, 19], temperature_2m_min: [14, 15],
+      sunrise: ['2026-10-06T07:58', '2026-10-07T07:59'], sunset: ['2026-10-06T19:22', '2026-10-07T19:20'], uv_index_max: [3.4, 2.1], precipitation_probability_max: [10, 70] },
+  };
+  const w = mapForecast(f, null);
+  assert.deepEqual(w.dailyForecast.map((d) => d.date), ['2026-10-06', '2026-10-07']);
+  assert.equal(w.dailyForecast[1].sunrise, '07:59');
+  assert.equal(w.dailyForecast[1].uvIndex, 2.1);
+  assert.deepEqual(w.hourlyAhead.map((h) => [h.date, h.time]), [['2026-10-06', '17:00'], ['2026-10-07', '09:00']]);
+});
+
+test('plausibleTemp: a forecast value for any day passes; another city\'s weather does not', () => {
+  const patch = { liveTemp: 22, dailyForecast: [{ low: 14, high: 24 }, { low: 15, high: 19 }, { low: 10, high: 16 }] };
+  assert.equal(plausibleTemp(22, patch), true, 'now');
+  assert.equal(plausibleTemp(15, patch), true, "tomorrow's low");
+  assert.equal(plausibleTemp(8, patch), true, 'within the week, a little margin');
+  assert.equal(plausibleTemp(-12, patch), false);
+  assert.equal(plausibleTemp(38, patch), false);
+  assert.equal(plausibleTemp(undefined, patch), true, 'nothing stated: nothing to contradict');
+});
+
+test('weather detection notes the day the answer is about', () => {
+  const fr = detectSpecialContent("Demain à Paris, les températures oscilleront entre **15 °C** et **19 °C**. Le ciel sera couvert avec de faibles pluies.");
+  assert.equal(fr.type, 'weather');
+  assert.equal(fr.data.forecastDay, 1);
+  assert.equal(detectSpecialContent('Après-demain à Lyon, la température sera de 21 °C avec du soleil.').data.forecastDay, 2);
+  assert.equal(detectSpecialContent("Tomorrow in London, the forecast is 14°C with light rain.").data.forecastDay, 1);
+  assert.equal(detectSpecialContent('Right now in Paris, the temperature is 22°C and it is cloudy.').data.forecastDay, undefined);
 });

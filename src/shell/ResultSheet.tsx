@@ -155,7 +155,7 @@ export function ResultSheet() {
   const body = () => {
     if (!agentOutcome) return null;
     const special = detectSpecialContent(agentOutcome.result, agentOutcome.agentName);
-    if (special) return <SpecialCardRenderer detected={special} rawContent={agentOutcome.result} />;
+    if (special) return <SpecialCardRenderer detected={special} rawContent={agentOutcome.result} agentName={agentOutcome.agentName} />;
     const items = parseResultItems(agentOutcome.result);
     const structured = items.length > 1 || !!(items[0].title || items[0].source);
     if (!structured) return <div className="surface p-5"><FormattedMarkdown content={agentOutcome.result} /></div>;

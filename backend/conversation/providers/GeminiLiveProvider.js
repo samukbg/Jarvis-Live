@@ -1,6 +1,7 @@
 import { Modality } from '@google/genai';
 import { PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from '../../device/phoneActions.js';
 import { TranscriptBuffer } from '../transcript.js';
+import { acknowledgement } from '../acknowledge.js';
 
 export class GeminiLiveProvider {
   constructor(options) {
@@ -20,12 +21,27 @@ export class GeminiLiveProvider {
     // Live transcribes in fragments: one line per utterance, not one per fragment.
     this.userSpeech = new TranscriptBuffer();
     this.jarvisSpeech = new TranscriptBuffer();
+    // Has Jarvis said anything since the user's last utterance? (else acknowledge a delegation)
+    this.saidThisTurn = false;
+    this.lastUserUtterance = '';
   }
 
   /** The user's utterance is over (Jarvis answers, calls a tool, or the turn ends): log it once. */
   flushUserSpeech() {
     const text = this.userSpeech.flush();
-    if (text) this.broadcast({ type: 'voice_transcript', text, role: 'user', is_final: true });
+    if (!text) return;
+    this.lastUserUtterance = text;
+    this.saidThisTurn = false;
+    this.broadcast({ type: 'voice_transcript', text, role: 'user', is_final: true });
+  }
+
+  /** Delegating without a word from Gemini first: Jarvis acknowledges in writing (it can't speak into this session). */
+  acknowledgeIfSilent(agentId) {
+    if (this.saidThisTurn) return;
+    const ack = acknowledgement(agentId, this.lastUserUtterance);
+    this.broadcastLog(`JARVIS: ${ack}`);
+    this.broadcast({ type: 'voice_transcript', text: ack, role: 'assistant', is_final: true });
+    this.saidThisTurn = true;
   }
 
   async connect(targetAgent = 'agy') {
@@ -113,6 +129,7 @@ export class GeminiLiveProvider {
                 }
                 for (const part of sc.modelTurn.parts) {
                   if (part.inlineData?.data) {
+                    this.saidThisTurn = true; // Jarvis is speaking
                     try {
                       const rawPcm = Buffer.from(part.inlineData.data, 'base64');
                       this.broadcastAudioChunk(rawPcm);
@@ -129,6 +146,7 @@ export class GeminiLiveProvider {
               
               // Show Gemini's spoken transcript in the UI
               if (sc.outputTranscription?.text) {
+                this.saidThisTurn = true;
                 const text = this.jarvisSpeech.add(sc.outputTranscription.text);
                 if (text) this.broadcast({ type: 'voice_transcript', text, role: 'assistant', is_final: false });
               }
@@ -152,6 +170,7 @@ export class GeminiLiveProvider {
                 })();
               } else if (fc && fc.name === `delegate_to_${this.targetAgent}`) {
                 const task = fc.args.task;
+                this.acknowledgeIfSilent(this.targetAgent);
                 this.broadcastLog(`[GEMINI LIVE] Delegating to ${this.targetAgent.toUpperCase()}: ${task}`);
                 
                 // Execute without blocking the event loop or audio stream

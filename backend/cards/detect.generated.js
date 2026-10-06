@@ -219,7 +219,17 @@ var CONDITIONS = [
 	]
 ];
 var WEATHER_WORDS = words("weather|forecast|temperatures?|humidity|degrees|météo|prévisions?|températures?|humidité|degrés|tempo|previsão|temperaturas?|umidade|humidade|graus|clima|pronóstico|humedad|grados");
-var TOMORROW = words("tomorrow|demain|amanhã|mañana");
+var TOMORROW = words("tomorrow|demain|amanhã|mañana|domani");
+var DAY_AFTER = words("day after tomorrow|après-demain|apres-demain|depois de amanhã|pasado mañana|dopodomani");
+/** The day an answer is about: 1 = tomorrow, 2 = the day after; undefined = today / now. */
+function forecastDayOf(text) {
+	const sentences = text.split(/(?<=[.!?])\s+|\n+/).filter((s) => s.trim());
+	const lead = sentences.find((s) => /-?\d+(?:\.\d+)?\s*\**\s*°/.test(s)) ?? sentences[0] ?? "";
+	for (const s of [lead, sentences[0] ?? ""]) {
+		if (DAY_AFTER.test(s)) return 2;
+		if (TOMORROW.test(s.replace(DAY_AFTER, ""))) return 1;
+	}
+}
 var RANGE = /(?:between|entre|from|de)\s+(-?\d+(?:\.\d+)?)\s*°?\s*[CF]?\s*(?:and|to|et|à|a|e|y)\s+(-?\d+(?:\.\d+)?)\s*°/iu;
 /** The condition mentioned first describes "now"; later mentions (e.g. rain chance) don't override it. */
 function currentCondition(text) {
@@ -287,7 +297,8 @@ function detectWeather(text) {
 			dailyForecast: tomorrow.high !== void 0 || tomorrow.low !== void 0 ? [{
 				day: "Tomorrow",
 				...tomorrow
-			}] : void 0
+			}] : void 0,
+			forecastDay: forecastDayOf(text)
 		})
 	};
 }

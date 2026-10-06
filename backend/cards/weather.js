@@ -61,8 +61,21 @@ export function mapForecast(f, aq) {
     conditionCode: wmo(h.weather_code?.[i], h.is_day?.[i] !== 0).conditionCode,
     pop: h.precipitation_probability?.[i] ?? undefined,
   }));
+  // 48 hours with their date: a "tomorrow" answer shows tomorrow's hours.
+  const hourlyAhead = (h.time ?? []).slice(0, 48).map((t, i) => compact({
+    date: t.slice(0, 10),
+    time: hhmm(t),
+    temp: round(h.temperature_2m?.[i]),
+    condition: wmo(h.weather_code?.[i], h.is_day?.[i] !== 0).condition,
+    conditionCode: wmo(h.weather_code?.[i], h.is_day?.[i] !== 0).conditionCode,
+    pop: h.precipitation_probability?.[i] ?? undefined,
+  }));
   const dailyForecast = (d.time ?? []).map((t, i) => compact({
+    date: t,
     day: weekday(t, i),
+    sunrise: hhmm(d.sunrise?.[i]),
+    sunset: hhmm(d.sunset?.[i]),
+    uvIndex: round(d.uv_index_max?.[i], 1),
     condition: wmo(d.weather_code?.[i]).condition,
     conditionCode: wmo(d.weather_code?.[i]).conditionCode,
     high: round(d.temperature_2m_max?.[i]),
@@ -95,8 +108,23 @@ export function mapForecast(f, aq) {
     airQuality: round(eaqi),
     airQualityStatus: aqiStatus(eaqi),
     hourlyForecast,
+    hourlyAhead,
     dailyForecast,
   });
+}
+
+/**
+ * Wrong-place guard: the agent's temperature must fit this place's weather — now, or any day
+ * of the forecast (a "tomorrow" answer states tomorrow's low/high, not the current reading).
+ */
+export function plausibleTemp(stated, patch) {
+  if (!Number.isFinite(stated)) return true;
+  if (Number.isFinite(patch.liveTemp) && Math.abs(stated - patch.liveTemp) <= 8) return true;
+  const days = (patch.dailyForecast ?? []).filter((d) => Number.isFinite(d.low) && Number.isFinite(d.high));
+  if (!days.length) return !Number.isFinite(patch.liveTemp);
+  const lo = Math.min(...days.map((d) => d.low));
+  const hi = Math.max(...days.map((d) => d.high));
+  return stated >= lo - 4 && stated <= hi + 4;
 }
 
 async function geocode(city, country) {
@@ -119,15 +147,14 @@ export async function enrichWeather(data) {
   const unit = data.tempUnit === 'F' ? 'fahrenheit' : 'celsius';
   const q = `latitude=${place.latitude}&longitude=${place.longitude}&timezone=auto`;
   const [f, aq] = await cached(`wx:${place.id}:${unit}`, 10 * 60e3, () => Promise.all([
-    getJson(`https://api.open-meteo.com/v1/forecast?${q}&temperature_unit=${unit}&forecast_days=7&forecast_hours=24`
+    getJson(`https://api.open-meteo.com/v1/forecast?${q}&temperature_unit=${unit}&forecast_days=7&forecast_hours=48`
       + '&current=temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,is_day,weather_code,wind_speed_10m,wind_direction_10m,pressure_msl,visibility,uv_index'
       + '&hourly=temperature_2m,weather_code,precipitation_probability,is_day'
       + '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max'),
     getJson(`https://air-quality-api.open-meteo.com/v1/air-quality?${q}&current=european_aqi`).catch(() => null),
   ]));
   const patch = mapForecast(f, aq);
-  // Wrong place guard: the agent's temperature must agree with the live one.
-  if (Number.isFinite(data.temp) && Number.isFinite(patch.liveTemp) && Math.abs(data.temp - patch.liveTemp) > 8) return null;
+  if (!plausibleTemp(data.temp, patch)) return null;
   return {
     data: { ...patch, city: place.name, country: place.country, latitude: place.latitude, longitude: place.longitude },
     prefer: 'stated',

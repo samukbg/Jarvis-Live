@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import {
   Sun, Cloud, CloudRain, CloudLightning, CloudSnow, CloudFog, CloudSun, Moon, MapPin, Thermometer, Droplets,
-  Wind, Umbrella, Leaf, Eye, Gauge, Sunrise, Sunset, Clock, CalendarRange, Navigation, Droplet,
+  Wind, Umbrella, Leaf, Eye, Gauge, Sunrise, Sunset, Clock, CalendarRange, Navigation, Droplet, CalendarDays, Radio,
 } from 'lucide-react';
 import type { WeatherData } from './types';
 import { CardShell, CountUp, EASE, GrowBar, Reveal, SectionLabel, Stat, StatGrid } from './kit';
@@ -140,43 +140,102 @@ export const WeatherCard: React.FC<{ data: WeatherData }> = ({ data }) => {
   const minT = withRange ? Math.min(...daily.map((d) => d.low as number)) : 0;
   const range = withRange ? Math.max(1, Math.max(...daily.map((d) => d.high as number)) - minT) : 1;
 
+  // The day the agent's answer is about ("demain", "tomorrow"…): it leads the card; the current
+  // conditions move to "Right now". Live days are dated; without live data, the detector's own
+  // "Tomorrow" entry stands in.
+  const focusIndex = data.forecastDay
+    ? (daily[data.forecastDay]?.date ? data.forecastDay : daily.findIndex((d) => d.day === 'Tomorrow' && data.forecastDay === 1))
+    : -1;
+  const focus = focusIndex >= 0 ? daily[focusIndex] : undefined;
+  const focusName = data.forecastDay === 2 ? 'In 2 days' : 'Tomorrow';
+  const focusDate = focus?.date
+    ? new Date(`${focus.date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+    : undefined;
+  const focusHours = focus?.date ? (data.hourlyAhead ?? []).filter((h) => h.date === focus.date) : [];
+  const shownHours = focus ? focusHours : hourly;
+  const heroCode = focus ? codeFor(focus.condition, focus.conditionCode) ?? code : code;
+  const [HeroIconF, iconColorF] = focus ? iconFor(focus.condition, focus.conditionCode) : [HeroIcon, iconColor];
+  const nowTemp = data.liveTemp ?? data.temp;
+
   return (
-    <CardShell accent={iconColor} gradient={GRADIENTS[code ?? ''] ?? 'linear-gradient(135deg, #15263A 0%, #0F1D2E 55%, #081018 100%)'} ambient={<AmbientSky code={code} />}>
+    <CardShell accent={iconColorF} gradient={GRADIENTS[heroCode ?? ''] ?? 'linear-gradient(135deg, #15263A 0%, #0F1D2E 55%, #081018 100%)'} ambient={<AmbientSky code={heroCode} />}>
       <div>
-        <Reveal index={0} className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            {data.city && (
-              <div className="flex items-center gap-1.5 text-[17px] font-semibold">
-                <MapPin size={15} className="text-cyan-200" />
-                <span className="truncate">{[data.city, data.region, data.country].filter(Boolean).join(', ')}</span>
+        {focus ? (
+          <Reveal index={0} className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="flex items-center gap-1.5 rounded-full border border-cyan-200/35 bg-cyan-200/15 px-2.5 py-0.5 text-[12px] font-semibold text-cyan-100">
+                  <CalendarDays size={12} /> {focusName}{focusDate ? ` · ${focusDate}` : ''}
+                </span>
+                {data.city && (
+                  <span className="flex items-center gap-1 text-[15px] font-semibold">
+                    <MapPin size={14} className="text-cyan-200" />
+                    <span className="truncate">{[data.city, data.region, data.country].filter(Boolean).join(', ')}</span>
+                  </span>
+                )}
               </div>
-            )}
-            <div className="flex items-start">
-              <CountUp value={data.temp} decimals={Number.isInteger(data.temp) ? 0 : 1} className="text-[64px] font-extralight leading-none tracking-tight" />
-              <span className="mt-2 text-xl text-slate-300">{unit}</span>
+              <div className="mt-1 flex items-baseline gap-2">
+                {focus.high !== undefined && <CountUp value={focus.high} className="text-[64px] font-extralight leading-none tracking-tight" />}
+                {focus.high !== undefined && <span className="text-xl text-slate-300">{unit}</span>}
+                {focus.low !== undefined && (
+                  <span className="text-[28px] font-light tabular-nums text-slate-400">/ {focus.low}°</span>
+                )}
+              </div>
+              {focus.condition && <div className="text-[17px] font-medium text-slate-300">{focus.condition}</div>}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {focus.pop !== undefined && (
+                  <span className="flex items-center gap-1 rounded-full bg-black/35 px-2.5 py-1 text-[12px] text-cyan-200"><Umbrella size={12} /> {focus.pop}% rain</span>
+                )}
+                {focus.uvIndex !== undefined && (
+                  <span className="flex items-center gap-1 rounded-full bg-black/35 px-2.5 py-1 text-[12px] text-amber-200"><Sun size={12} /> UV {focus.uvIndex}</span>
+                )}
+                {focus.sunrise && focus.sunset && (
+                  <span className="flex items-center gap-1 rounded-full bg-black/35 px-2.5 py-1 text-[12px] text-slate-300"><Sunrise size={12} className="text-amber-400" /> {focus.sunrise} – {focus.sunset}</span>
+                )}
+              </div>
             </div>
-            {data.condition && <div className="text-[17px] font-medium text-slate-300">{data.condition}</div>}
-            {(data.high !== undefined || data.low !== undefined) && (
-              <div className="text-[13px] text-slate-400">
-                {[data.high !== undefined && `H ${data.high}°`, data.low !== undefined && `L ${data.low}°`].filter(Boolean).join('  ·  ')}
-              </div>
-            )}
-          </div>
-          <div>
             <motion.div initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', damping: 10, stiffness: 140, delay: 0.15 }}>
               <motion.div animate={{ y: [0, -6, 0] }} transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}>
-                <HeroIcon size={84} style={{ color: iconColor, filter: `drop-shadow(0 0 18px ${iconColor}66)` }} />
+                <HeroIconF size={84} style={{ color: iconColorF, filter: `drop-shadow(0 0 18px ${iconColorF}66)` }} />
               </motion.div>
             </motion.div>
-          </div>
-        </Reveal>
+          </Reveal>
+        ) : (
+          <Reveal index={0} className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              {data.city && (
+                <div className="flex items-center gap-1.5 text-[17px] font-semibold">
+                  <MapPin size={15} className="text-cyan-200" />
+                  <span className="truncate">{[data.city, data.region, data.country].filter(Boolean).join(', ')}</span>
+                </div>
+              )}
+              <div className="flex items-start">
+                <CountUp value={data.temp} decimals={Number.isInteger(data.temp) ? 0 : 1} className="text-[64px] font-extralight leading-none tracking-tight" />
+                <span className="mt-2 text-xl text-slate-300">{unit}</span>
+              </div>
+              {data.condition && <div className="text-[17px] font-medium text-slate-300">{data.condition}</div>}
+              {(data.high !== undefined || data.low !== undefined) && (
+                <div className="text-[13px] text-slate-400">
+                  {[data.high !== undefined && `H ${data.high}°`, data.low !== undefined && `L ${data.low}°`].filter(Boolean).join('  ·  ')}
+                </div>
+              )}
+            </div>
+            <div>
+              <motion.div initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', damping: 10, stiffness: 140, delay: 0.15 }}>
+                <motion.div animate={{ y: [0, -6, 0] }} transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}>
+                  <HeroIcon size={84} style={{ color: iconColor, filter: `drop-shadow(0 0 18px ${iconColor}66)` }} />
+                </motion.div>
+              </motion.div>
+            </div>
+          </Reveal>
+        )}
       </div>
 
-      {hourly.length > 0 && (
+      {shownHours.length > 0 && (
         <Reveal index={1}>
-          <SectionLabel icon={<Clock size={13} className="text-cyan-200" />}>Next hours</SectionLabel>
+          <SectionLabel icon={<Clock size={13} className="text-cyan-200" />}>{focus ? `${focusName}, hour by hour` : 'Next hours'}</SectionLabel>
           <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {hourly.map((h, i) => {
+            {shownHours.map((h, i) => {
               const [HI, hc] = iconFor(h.condition, h.conditionCode);
               return (
                 <motion.div
@@ -185,9 +244,9 @@ export const WeatherCard: React.FC<{ data: WeatherData }> = ({ data }) => {
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.12 + i * 0.035, type: 'spring', damping: 16 }}
                   whileHover={{ y: -3 }}
-                  className={`flex shrink-0 flex-col items-center gap-1 rounded-xl px-3 py-2 ${i === 0 ? 'border border-cyan-200/35 bg-cyan-200/15' : 'bg-black/35'}`}
+                  className={`flex shrink-0 flex-col items-center gap-1 rounded-xl px-3 py-2 ${i === 0 && !focus ? 'border border-cyan-200/35 bg-cyan-200/15' : 'bg-black/35'}`}
                 >
-                  <span className={`text-[11px] ${i === 0 ? 'text-slate-100' : 'text-slate-400'}`}>{h.time}</span>
+                  <span className={`text-[11px] ${i === 0 && !focus ? 'text-slate-100' : 'text-slate-400'}`}>{h.time}</span>
                   <HI size={22} style={{ color: hc }} />
                   <span className="text-[15px] font-semibold tabular-nums">{h.temp}°</span>
                   <span className="h-3 text-[11px] text-cyan-300">{h.pop ? `${h.pop}%` : ''}</span>
@@ -205,7 +264,7 @@ export const WeatherCard: React.FC<{ data: WeatherData }> = ({ data }) => {
             {daily.map((d, i) => {
               const [DI, dc] = iconFor(d.condition, d.conditionCode);
               return (
-                <Reveal key={`${d.day}-${i}`} index={3 + i} className="flex items-center gap-2 text-[14px]">
+                <Reveal key={`${d.day}-${i}`} index={3 + i} className={`flex items-center gap-2 rounded-lg text-[14px] ${i === focusIndex ? '-mx-2 border border-cyan-200/30 bg-cyan-200/10 px-2 py-1' : ''}`}>
                   <span className="w-12 font-medium">{d.day}</span>
                   {d.condition && <DI size={18} style={{ color: dc }} />}
                   <span className="w-8 text-[11px] text-cyan-300">{d.pop ? `${d.pop}%` : ''}</span>
@@ -235,9 +294,17 @@ export const WeatherCard: React.FC<{ data: WeatherData }> = ({ data }) => {
         </Reveal>
       )}
 
-      {data.sunrise && data.sunset && (
+      {!focus && data.sunrise && data.sunset && (
         <Reveal index={3}>
           <SunCycle sunrise={data.sunrise} sunset={data.sunset} now={data.localTime} />
+        </Reveal>
+      )}
+
+      {focus && (nowTemp !== undefined || tiles.length > 0) && (
+        <Reveal index={3}>
+          <SectionLabel icon={<Radio size={13} className="text-cyan-200" />}>
+            Right now{nowTemp !== undefined ? ` · ${nowTemp}${unit}` : ''}{data.condition ? ` · ${data.condition}` : ''}
+          </SectionLabel>
         </Reveal>
       )}
 

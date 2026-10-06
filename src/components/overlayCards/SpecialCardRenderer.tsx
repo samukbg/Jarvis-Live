@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Eye, Code } from 'lucide-react';
+import { Eye, Code, MessageSquareQuote } from 'lucide-react';
 import type { DetectedSpecialContent, WeatherData, FinanceData, FlightData, SystemDiagnosticsData, TaskRoadmapData, MediaAudioData, TranslationData, ChartData, SportsScoreData, RecipeData, WalletData } from './types';
 import { WeatherCard } from './WeatherCard';
 import { FinanceCard } from './FinanceCard';
@@ -18,10 +18,49 @@ import { useCardEnrichment } from './useCardEnrichment';
 import type { CardLive } from './enrichment';
 import { SourceFooter } from './motion';
 
+/**
+ * The agent's own answer under the card: what the card can't show (advice, caveats, the
+ * details of a forecast…). Clamped with a fade; raw data payloads (JSON) are skipped.
+ */
+const AgentNote: React.FC<{ content: string; agentName?: string; color: string }> = ({ content, agentName, color }) => {
+  const [open, setOpen] = useState(false);
+  const text = content.trim();
+  if (!text || /^[{[]/.test(text) || /^```json/i.test(text)) return null;
+  const long = text.length > 320 || text.split('\n').length > 5;
+  const who = agentName ? agentName.charAt(0).toUpperCase() + agentName.slice(1).toLowerCase() : '';
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', damping: 20, stiffness: 160, delay: 0.35 }}
+      className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-4"
+    >
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color }}>
+        <MessageSquareQuote size={13} /> {who ? `${who}'s answer` : 'Answer'}
+      </div>
+      <motion.div
+        initial={false}
+        animate={{ height: open || !long ? 'auto' : 116 }}
+        transition={{ type: 'spring', damping: 26, stiffness: 220 }}
+        className="relative overflow-hidden text-[14px] leading-relaxed text-slate-300"
+      >
+        <FormattedMarkdown content={text} compact />
+        {!open && long && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-[rgba(10,18,30,0.96)] to-transparent" />}
+      </motion.div>
+      {long && (
+        <button type="button" onClick={() => setOpen(!open)} className="mt-2 text-[12px] font-semibold hover:underline" style={{ color }}>
+          {open ? 'Show less' : 'Read the full answer'}
+        </button>
+      )}
+    </motion.div>
+  );
+};
+
 export const SpecialCardRenderer: React.FC<{ 
   detected: DetectedSpecialContent;
   rawContent: string;
-}> = ({ detected, rawContent }) => {
+  agentName?: string;
+}> = ({ detected, rawContent, agentName }) => {
   const [viewMode, setViewMode] = useState<'visual' | 'raw'>('visual');
 
   const { data, enrichment, loading, refresh } = useCardEnrichment(detected);
@@ -76,6 +115,7 @@ export const SpecialCardRenderer: React.FC<{
           {viewMode === 'visual' ? renderComponent() : <FormattedMarkdown content={rawContent} />}
         </motion.div>
       </AnimatePresence>
+      {viewMode === 'visual' && <AgentNote content={rawContent} agentName={agentName} color={meta.color} />}
       {viewMode === 'visual' && <SourceFooter sources={enrichment?.sources} live={live.live} loading={loading} />}
     </div>
   );

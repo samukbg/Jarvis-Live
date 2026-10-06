@@ -514,7 +514,15 @@ export const useStore = create<AppState>((set, get) => {
               break;
             }
             case 'agent_conversation': {
-              console.info(`[CONVERSATIONAL TALK] ${msg.agentName}: ${(msg.result || '').slice(0, 100)}`);
+              // An answer the server judged conversational: still show it (a Jarvis bubble), and
+              // open its card when it carries one (weather, finance…) — typed questions in
+              // Gemini Live mode aren't spoken, so this is the only place the answer appears.
+              const result: string = msg.result || '';
+              if (!result.trim()) break;
+              get().addLog(`JARVIS: ${result.replace(/\*\*|__|`/g, '').replace(/\s*\n+\s*/g, ' ').trim()}`);
+              if (detectSpecialContent(result, msg.agentName)) {
+                set({ agentOutcome: { agentId: msg.agentId || 'jarvis', agentName: msg.agentName || 'JARVIS', result } });
+              }
               break;
             }
             case 'agent_action': {

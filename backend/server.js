@@ -39,6 +39,8 @@ import { isAuthorized } from './shared/auth.js';
 import { callbackUrl, createAvatarSource, lanAddress } from './avatar/avatarSource.js';
 import { createStatusCollector } from './system/serverStatus.js';
 import { createAgentDetector } from './agents/detect.js';
+import { UtteranceJoiner } from './avatar/utteranceJoiner.js';
+import { acknowledgement } from './conversation/acknowledge.js';
 import { agyModelArgs } from './agents/agyModel.js';
 import { wslDistro, wslRoots } from './system/wslDistro.js';
 import { pickAvatar } from './avatar/pickAvatar.js';
@@ -771,7 +773,25 @@ app.post('/api/voice/stream', async (req, res) => {
   }
 });
 
+// What the user says to the avatar, one line per utterance (avatar/utteranceJoiner.js).
+// Did the avatar say anything since the user's last utterance? (else Jarvis acknowledges)
+const avatarTurn = { said: false, userText: '' };
+const avatarUserSpeech = new UtteranceJoiner({
+  onUtterance: (text) => {
+    Object.assign(avatarTurn, { said: false, userText: text });
+    broadcast({ type: 'voice_transcript', text, role: 'user', is_final: true });
+  },
+});
+
 app.post('/api/avatar/delegate', async (req, res) => {
+  avatarUserSpeech.flush(); // the request is out: the user's utterance is complete
+  if (!avatarTurn.said && req.body?.task) {
+    // The avatar skipped its acknowledgement: never start a task in silence.
+    const ack = acknowledgement(req.body.agent || 'agy', avatarTurn.userText || req.body.task, activeLanguage);
+    broadcastLog(`JARVIS: ${ack}`);
+    broadcast({ type: 'voice_transcript', text: ack, role: 'assistant', is_final: true });
+    avatarTurn.said = true;
+  }
   try {
     const { task, agent = 'agy' } = req.body;
     if (!task) return res.status(400).json({ error: 'Task required' });
@@ -796,11 +816,16 @@ app.post(['/api/avatar/transcript', '/api/avatar/transcript/'], async (req, res)
     const { text, role = 'assistant', is_final = true } = req.body;
     if (!text) return res.status(400).json({ error: 'Text required' });
 
-    // 1. Broadcast voice transcript so HUD subtitle pill updates
-    broadcast({ type: 'voice_transcript', text, role, is_final });
-    if (is_final) {
-      broadcastLog(`[LIVE AVATAR] ${role === 'user' ? 'User' : 'Jarvis'}: ${text}`);
+    // 1. The live caption, and the activity log once per utterance (the app logs the user's
+    //    final lines itself: no second "[LIVE AVATAR] User:" line).
+    if (role === 'user') {
+      broadcast({ type: 'voice_transcript', text: avatarUserSpeech.add(text), role, is_final: false });
+      return res.json({ ok: true });
     }
+    avatarUserSpeech.flush(); // Jarvis answers: the user's utterance is complete
+    avatarTurn.said = true;
+    broadcast({ type: 'voice_transcript', text, role, is_final });
+    if (is_final) broadcastLog(`[LIVE AVATAR] Jarvis: ${text}`);
 
     // 2. Only broadcast agent_result if the assistant output contains a 3D model or rich visual media artifact
     if (role === 'assistant' && is_final) {
@@ -1704,6 +1729,13 @@ async function executeOrchestration(command, source = 'text') {
   isOrchestrating = true;
   broadcastAgentStatus('jarvis', 'THINKING');
   broadcastAgentStatus(activeModel, 'THINKING');
+
+  // A task never starts in silence: say who is on it, in the user's language (spoken when the
+  // orb isn't on Gemini Live — that session speaks for itself).
+  const ack = acknowledgement(activeModel, command, activeLanguage);
+  broadcastLog(`JARVIS: ${ack}`);
+  broadcast({ type: 'voice_transcript', text: ack, role: 'assistant', is_final: true });
+  if (source.startsWith('voice') && !geminiLiveMode) speak(ack);
   
   const lowerCmd = command.toLowerCase();
 
