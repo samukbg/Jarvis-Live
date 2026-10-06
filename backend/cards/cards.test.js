@@ -162,3 +162,22 @@ test('weather detection notes the day the answer is about', () => {
   assert.equal(detectSpecialContent("Tomorrow in London, the forecast is 14°C with light rain.").data.forecastDay, 1);
   assert.equal(detectSpecialContent('Right now in Paris, the temperature is 22°C and it is cloudy.').data.forecastDay, undefined);
 });
+
+test('finance detection reads prices the way people write them (French spaces, €, decimal commas)', () => {
+  const fr = detectSpecialContent('Cours du Bitcoin (BTC)\nPrix en Euros (€) : 76 151 € (+0,14 % sur 24h)\nPrix en Dollars ($) : 85 736 $ (+0,58 % sur 24h)');
+  assert.equal(fr?.type, 'finance');
+  assert.equal(fr.data.symbol, 'BTC');
+  assert.equal(fr.data.price, 85736, 'the dollar price when both are given (live data is in USD)');
+  assert.equal(fr.data.changePercent, 0.58, "that price's own change");
+  const eur = detectSpecialContent("Le Bitcoin (BTC) s'échange à 76 151 € (+0,14 % sur 24h).");
+  assert.equal(eur.data.price, 76151);
+  assert.equal(eur.data.currency, 'EUR');
+  assert.equal(eur.data.changePercent, 0.14);
+  assert.equal(detectSpecialContent('Bitcoin (BTC) is trading at $85,736, up 0.58% in 24h.').data.price, 85736);
+  const named = detectSpecialContent('Le cours du Bitcoin est de 85 736 $, en baisse de 1,5 % sur la journée.');
+  assert.equal(named.data.symbol, 'BTC');
+  assert.equal(named.data.changePercent, -1.5);
+  const aapl = detectSpecialContent("L'action Apple (AAPL) cote 231,45 $, en hausse de 1,2 %.");
+  assert.equal(aapl.data.price, 231.45);
+  assert.equal(aapl.data.changePercent, 1.2);
+});

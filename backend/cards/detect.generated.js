@@ -73,25 +73,48 @@ function detectJson(text) {
 		summaryText: parsed.summary || parsed.description
 	};
 }
+/** The text after the first `keyword` match, `span` characters long ('' if absent). */
+function after(text, keyword, span = 260) {
+	const m = keyword.exec(text);
+	return m ? text.slice(m.index, m.index + span) : "";
+}
+var GB = String.raw`(\d+(?:[.,]\d+)?)\s*(TB|To|GB|Go|GiB|MB|Mo)\b`;
+var toGB = (v, unit) => {
+	const n = localeNumber(v) ?? 0;
+	return /^t/i.test(unit) ? n * 1e3 : /^m/i.test(unit) ? Math.round(n / 1e3 * 10) / 10 : n;
+};
+/** "17 GB in use out of 18 GB", "419 Go sur 460 Go", "8/16 GB", or "total 18 Go" + "17 Go utilisés". */
+function usedOfTotal(section) {
+	const pair = section.match(new RegExp(String.raw`~?${GB}\s*(?:in use|used|utilis[ée]s?|occup[ée]s?|usados?|usati)?\s*(?:out of|of|sur|/|de|su)\s*~?${GB}`, "iu"));
+	if (pair) return {
+		used: toGB(pair[1], pair[2]),
+		total: toGB(pair[3], pair[4])
+	};
+	const total = section.match(new RegExp(String.raw`(?:total|capacit[ée](?: totale)?|capacity|size|taille)[^\d\n]{0,24}${GB}`, "iu"));
+	const used = section.match(new RegExp(String.raw`~?${GB}\s*(?:in use|used|utilis[ée]s?|occup[ée]s?|usados?|usati)`, "iu"));
+	if (total && used) return {
+		used: toGB(used[1], used[2]),
+		total: toGB(total[1], total[2])
+	};
+}
 function detectSystem(text) {
-	if (!/\b(system diagnostics|system status|hardware|telemetry|diagnostics|cpu|gpu|ram|memory)\b/i.test(text)) return void 0;
-	const cpu = text.match(/\bcpu(?:\s*(?:usage|load|utili[sz]ation))?[^.%\d]{0,15}?(\d+(?:\.\d+)?)\s*%/i);
-	const cpuTemp = text.match(/\b(?:cpu\s*)?temp(?:erature)?[^.\d]{0,12}?(\d+(?:\.\d+)?)\s*°\s*C\b/i);
-	const ram = text.match(/\b(?:ram|memory)[^.\d]{0,12}?(\d+(?:\.\d+)?)\s*GB\s*(?:\/|of)\s*(\d+(?:\.\d+)?)\s*GB/i);
-	const disk = text.match(/\b(?:disk|storage|ssd|nvme)(?:\s*usage)?[^.\d]{0,12}?(\d+(?:\.\d+)?)\s*(GB|TB)\s*(?:\/|of)\s*(\d+(?:\.\d+)?)\s*(GB|TB)/i);
-	const gpu = text.match(/\bgpu(?:\s*(?:usage|load|utili[sz]ation))?[^.%\d]{0,12}?(\d+(?:\.\d+)?)\s*%/i);
+	if (!words("system diagnostics|system status|hardware|telemetry|diagnostics|cpu|gpu|ram|memory|processeur|mémoire|m[ée]moire vive|processador|memória|procesador|memoria").test(text)) return void 0;
+	const cpu = after(text, /\b(?:cpu|processeur|processor|processador|procesador)\b/i).match(/(\d+(?:[.,]\d+)?)\s*%/);
+	const cpuTemp = text.match(/\b(?:cpu\s*)?temp(?:erature|érature)?[^.\d]{0,12}?(\d+(?:\.\d+)?)\s*°\s*C\b/i);
+	const ram = usedOfTotal(after(text, /\b(?:ram|memory|m[ée]moire|memória|memoria)\b/i, 320));
+	const disk = usedOfTotal(after(text, /\b(?:disk|disque|storage|stockage|ssd|nvme|disco|armazenamento|almacenamiento)\b/i, 360));
+	const gpu = after(text, /\bgpu\b/i, 160).match(/(\d+(?:[.,]\d+)?)\s*%/);
 	const gpuTemp = text.match(/\bgpu\s*temp(?:erature)?[^.\d]{0,8}?(\d+(?:\.\d+)?)\s*°\s*C\b/i);
-	const cores = text.match(/(\d+)[- ]core\b/i);
-	const toGB = (v, unit) => unit.toUpperCase() === "TB" ? num(v) * 1e3 : num(v);
+	const cores = text.match(/(\d+)[- ](?:core|cœurs?|coeurs?|núcleos)\b/i);
 	const data = compact({
-		cpuUsage: cpu ? num(cpu[1]) : void 0,
+		cpuUsage: cpu ? localeNumber(cpu[1]) : void 0,
 		cpuTemp: cpuTemp ? num(cpuTemp[1]) : void 0,
 		cpuCores: cores ? parseInt(cores[1], 10) : void 0,
-		ramUsedGB: ram ? num(ram[1]) : void 0,
-		ramTotalGB: ram ? num(ram[2]) : void 0,
-		diskUsedGB: disk ? toGB(disk[1], disk[2]) : void 0,
-		diskTotalGB: disk ? toGB(disk[3], disk[4]) : void 0,
-		gpuUsage: gpu ? num(gpu[1]) : void 0,
+		ramUsedGB: ram?.used,
+		ramTotalGB: ram?.total,
+		diskUsedGB: disk?.used,
+		diskTotalGB: disk?.total,
+		gpuUsage: gpu ? localeNumber(gpu[1]) : void 0,
 		gpuTemp: gpuTemp ? num(gpuTemp[1]) : void 0
 	});
 	return [
@@ -303,19 +326,81 @@ function detectWeather(text) {
 	};
 }
 var KNOWN_TICKERS = /\b(BTC|ETH|SOL|AAPL|NVDA|TSLA|AMZN|MSFT|GOOGL|META|SPY|QQQ)\b/;
+var NAMED_COINS = [
+	[
+		words("bitcoin"),
+		"BTC",
+		"Bitcoin"
+	],
+	[
+		words("ethereum|ether"),
+		"ETH",
+		"Ethereum"
+	],
+	[
+		words("solana"),
+		"SOL",
+		"Solana"
+	]
+];
+var MARKET_WORDS = words("stock|shares?|crypto|cryptocurrency|market|trading|trades|price|volume|24h|bullish|bearish|up|down|cours|prix|bourse|action|cote|cotation|march[ée]|hausse|baisse|cryptomonnaie|euros?|dollars?|preço|cotação|bolsa|alta|queda|precio|cotización|subida|bajada|prezzo|borsa|rialzo|ribasso");
+/** "85 736", "76 151,50", "1,234.56", "1.234,56", "231,45" → a number (any locale). */
+function localeNumber(raw) {
+	let s = raw.replace(/[\s  ']/g, "");
+	const comma = s.lastIndexOf(",");
+	const dot = s.lastIndexOf(".");
+	if (comma >= 0 && dot >= 0) s = comma > dot ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+	else if (comma >= 0) s = /^\d{1,3}(,\d{3})+$/.test(s) ? s.replace(/,/g, "") : s.replace(",", ".");
+	else if (/^\d{1,3}(\.\d{3}){2,}$/.test(s)) s = s.replace(/\./g, "");
+	const n = Number(s);
+	return Number.isFinite(n) ? n : void 0;
+}
+var AMOUNT = String.raw`\d{1,3}(?:[   .,']\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?`;
+var MONEY_BEFORE = new RegExp(String.raw`(?<![+\-−]\s?)(US\$|\$|€|£|USD|EUR|GBP)\s?(${AMOUNT})(?![\d.,]*\s*[TBMK]\b)`, "giu");
+var MONEY_AFTER = new RegExp(String.raw`(?<![\d+\-−.,])(${AMOUNT})\s?(\$|€|£|USD|EUR|GBP|dollars?|euros?)(?![\p{L}])`, "giu");
+var currencyCode = (c) => /€|eur/i.test(c) ? "EUR" : /£|gbp/i.test(c) ? "GBP" : "USD";
+function moneyAmounts(text) {
+	const out = [];
+	for (const m of text.matchAll(MONEY_BEFORE)) {
+		const value = localeNumber(m[2]);
+		if (value !== void 0) out.push({
+			value,
+			currency: currencyCode(m[1]),
+			index: m.index ?? 0
+		});
+	}
+	for (const m of text.matchAll(MONEY_AFTER)) {
+		const value = localeNumber(m[1]);
+		if (value !== void 0) out.push({
+			value,
+			currency: currencyCode(m[2]),
+			index: m.index ?? 0
+		});
+	}
+	return out.sort((a, b) => a.index - b.index);
+}
+var SIGNED_PCT = /([+\-−])\s?(\d+(?:[.,]\d+)?)\s*%/;
+var WORDED_PCT = /(up|rose|gained|climbed|jumped|higher|down|fell|dropped|lost|slid|lower|hausse|baisse|alta|queda|subida|bajada|alza|baja|rialzo|ribasso|calo)\s+(?:by\s+|de\s+|di\s+)?(\d+(?:[.,]\d+)?)\s*%/iu;
+var FALLING = /^(down|fell|dropped|lost|slid|lower|baisse|queda|bajada|baja|ribasso|calo)$/i;
+function percentChange(text) {
+	const signed = text.match(SIGNED_PCT);
+	if (signed) return (signed[1] === "+" ? 1 : -1) * (localeNumber(signed[2]) ?? 0);
+	const worded = text.match(WORDED_PCT);
+	if (worded) return (FALLING.test(worded[1]) ? -1 : 1) * (localeNumber(worded[2]) ?? 0);
+}
 function detectFinance(text) {
 	const tickerM = firstMatch(text, /\(\s*\$?([A-Z]{2,6})\s*\)/, /\$([A-Z]{2,6})\b/, KNOWN_TICKERS);
-	if (!tickerM) return void 0;
-	const symbol = tickerM[1];
-	const priceM = firstMatch(text, /\b(?:trading at|trades at|priced at|price(?: is| of)?|is at|worth)\s*:?\s*\$\s*([\d,]+(?:\.\d+)?)(?!\s*[TBMK]\b)/i, /\$\s*([\d,]+(?:\.\d+)?)(?!\s*[TBMK]\b|[\d,.])/);
-	if (!priceM) return void 0;
-	if (!/\b(stock|shares?|crypto|market|trading|trades|price|volume|24h|bullish|bearish|up|down)\b/i.test(text) && !text.includes("%")) return void 0;
+	const named = tickerM ? void 0 : NAMED_COINS.find(([re]) => re.test(text));
+	if (!tickerM && !named) return void 0;
+	const symbol = tickerM ? tickerM[1] : named[1];
+	const amounts = moneyAmounts(text);
+	const priced = amounts.find((a) => a.currency === "USD") ?? amounts[0];
+	if (!priced) return void 0;
+	if (!MARKET_WORDS.test(text) && !text.includes("%")) return void 0;
+	const lineStart = text.lastIndexOf("\n", priced.index) + 1;
+	const lineEnd = text.indexOf("\n", priced.index);
+	const changePercent = percentChange(text.slice(lineStart, lineEnd < 0 ? void 0 : lineEnd)) ?? percentChange(text);
 	const nameM = text.match(new RegExp(`((?:[A-Z][\\w&.\\-]*\\s?){1,4})\\(\\s*\\$?${symbol}\\s*\\)`));
-	const signed = text.match(/([+\-−])\s?(\d+(?:\.\d+)?)\s*%/);
-	const worded = text.match(/\b(up|rose|gained|climbed|jumped|higher|down|fell|dropped|lost|slid|lower)\s+(?:by\s+)?(\d+(?:\.\d+)?)\s*%/i);
-	let changePercent;
-	if (signed) changePercent = (signed[1] === "+" ? 1 : -1) * num(signed[2]);
-	else if (worded) changePercent = (/^(down|fell|dropped|lost|slid|lower)$/i.test(worded[1]) ? -1 : 1) * num(worded[2]);
 	const changeAbs = text.match(/([+\-−])\s?\$\s*([\d,]+(?:\.\d+)?)/);
 	const cap = text.match(/\bmarket cap(?:itali[sz]ation)?(?:\s*of)?[:\s]*(\$\s*[\d.,]+\s*[TBMK])\b/i);
 	const vol = text.match(/\bvolume(?:\s*of)?[:\s]*\$?\s*([\d.,]+\s*[TBMK])\b/i);
@@ -327,8 +412,9 @@ function detectFinance(text) {
 		type: "finance",
 		data: compact({
 			symbol,
-			name: nameM ? nameM[1].trim() : void 0,
-			price: num(priceM[1]),
+			name: nameM ? nameM[1].trim() : named?.[2],
+			price: priced.value,
+			currency: priced.currency !== "USD" ? priced.currency : void 0,
 			change: changeAbs ? (changeAbs[1] === "+" ? 1 : -1) * num(changeAbs[2]) : void 0,
 			changePercent,
 			marketCap: cap ? cap[1].replace(/\s+/g, "") : void 0,
@@ -369,13 +455,15 @@ var AIRLINES = [
 	"Southwest"
 ];
 function detectFlight(text) {
-	if (!/\b(flight|airline|departure|arrival|gate|terminal|airport|boarding|landed|departed)\b/i.test(text)) return void 0;
+	if (!words("flight|airline|departure|arrival|gate|terminal|airport|boarding|landed|departed|vol|d[ée]part|arriv[ée]e|a[ée]roport|embarquement|atterri|d[ée]coll[ée]|voo|vuelo|volo").test(text)) return void 0;
 	const fn = text.match(/\b((?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\s?\d{1,4})\b/);
 	const route = firstMatch(text, /\bfrom\s+([A-Z]{3})\s+to\s+([A-Z]{3})\b/, /\b([A-Z]{3})\s*(?:→|->|–|—)\s*([A-Z]{3})\b/);
-	if (!fn || !route) return void 0;
-	const [originCode, destCode] = [route[1], route[2]];
+	const inParens = [...new Set([...text.matchAll(/\(([A-Z]{3})(?=[\s,;)–-])/g)].map((m) => m[1]))];
+	const codes = route ? [route[1], route[2]] : inParens.length >= 2 ? inParens.slice(0, 2) : void 0;
+	if (!fn || !codes) return void 0;
+	const [originCode, destCode] = codes;
 	const airline = AIRLINES.find((a) => new RegExp(`\\b${a.replace(/ /g, "\\s+")}\\b`, "i").test(text));
-	const status = /\bcancell?ed\b/i.test(text) ? "CANCELLED" : /\bdelayed\b/i.test(text) ? "DELAYED" : /\blanded\b/i.test(text) ? "LANDED" : /\bboarding\b/i.test(text) ? "BOARDING" : /\b(cruising|in flight|en route|airborne|in the air)\b/i.test(text) ? "IN FLIGHT" : /\bon time\b/i.test(text) ? "ON TIME" : /\bscheduled\b/i.test(text) ? "SCHEDULED" : void 0;
+	const status = words("cancell?ed|annul[ée]e?|cancelado|cancellato").test(text) ? "CANCELLED" : words("delayed|retard[ée]?|en retard|atrasado|retrasado|in ritardo").test(text) ? "DELAYED" : words("landed|arrived|touched down|atterri|a atterri|arriv[ée] à destination|aterrizó|aterrou|atterrato").test(text) ? "LANDED" : words("boarding|embarquement").test(text) ? "BOARDING" : words("cruising|in flight|en route|airborne|in the air|en vol|em voo|en vuelo|in volo").test(text) ? "IN FLIGHT" : words("on time|à l'heure|à l’heure|selon les horaires|no horário|a tiempo|in orario").test(text) ? "ON TIME" : words("scheduled|prévu|programado|previsto").test(text) ? "SCHEDULED" : void 0;
 	const anchors = [];
 	const addAnchors = (re, side) => {
 		for (const m of text.matchAll(re)) anchors.push({
@@ -385,8 +473,8 @@ function detectFlight(text) {
 	};
 	addAnchors(new RegExp(`\\b${originCode}\\b`, "g"), "origin");
 	addAnchors(new RegExp(`\\b${destCode}\\b`, "g"), "destination");
-	addAnchors(/\b(?:depart\w*|take[- ]?off|boarding)\b/gi, "origin");
-	addAnchors(/\b(?:land\w*|arriv\w*)\b/gi, "destination");
+	addAnchors(/(?:\bdepart\w*|\btake[- ]?off|\bboarding|d[ée]part|d[ée]coll)/giu, "origin");
+	addAnchors(/(?:\bland\w*|\barriv\w*|atterri|touched down)/giu, "destination");
 	anchors.sort((a, b) => a.index - b.index);
 	const sideAt = (index) => {
 		let side = "origin";
@@ -408,8 +496,32 @@ function detectFlight(text) {
 		const side = sideAt(m.index ?? 0);
 		place[side].gate ??= m[1];
 	}
-	const arrival = text.match(/\b(?:land\w*|arriv\w*)\b[^.]*?\b(\d{1,2}:\d{2})\b/i);
-	const departure = text.match(/\b(?:depart\w*|take[- ]?off)\b[^.]*?\b(\d{1,2}:\d{2})\b/i);
+	const TIME = String.raw`(\d{1,2})[:h](\d{2})(?:\s?([AP]M))?`;
+	const clock = (m) => m ? `${m[1].padStart(2, "0")}:${m[2]}${m[3] ? ` ${m[3]}` : ""}` : void 0;
+	const arrivalM = text.match(new RegExp(String.raw`(?:\bland\w*|\barriv\w*|atterri|touched down)[^\n]*?${TIME}`, "iu"));
+	const departureM = text.match(new RegExp(String.raw`(?:\bdepart\w*|d[ée]part|\btake[- ]?off|d[ée]coll\w*)[^\n]*?${TIME}`, "iu"));
+	const actualVsPlanned = (section) => {
+		if (!section) return void 0;
+		const m = text.slice(section.index ?? 0, (section.index ?? 0) + 220).match(new RegExp(String.raw`${TIME}[^\n\d]{0,24}?(?:au lieu de|instead of|\(?scheduled(?: for)?|\(?prévue? (?:à|pour)|em vez de|en lugar de|invece delle?)\s*${TIME}`, "iu"));
+		return m ? {
+			actual: clock([
+				m[0],
+				m[1],
+				m[2],
+				m[3]
+			]),
+			planned: clock([
+				m[0],
+				m[4],
+				m[5],
+				m[6]
+			])
+		} : void 0;
+	};
+	const depTimes = actualVsPlanned(departureM);
+	const arrTimes = actualVsPlanned(arrivalM);
+	const arrival = arrTimes?.actual ?? clock(arrivalM);
+	const departure = depTimes?.planned ?? clock(departureM);
 	const altitude = text.match(/\b(?:at|altitude(?:\s+of)?)\s+([\d,]{3,})\s*(ft|feet|m)\b/i);
 	const speed = text.match(/\bspeed(?:\s+of)?[:\s]*([\d,]+\s*(?:knots|km\/h|mph))/i);
 	const progress = text.match(/\b(\d{1,3})\s*%\s*(?:complete|of the way)/i);
@@ -423,12 +535,14 @@ function detectFlight(text) {
 			origin: {
 				code: originCode,
 				...place.origin,
-				scheduledTime: departure?.[1]
+				scheduledTime: departure,
+				actualTime: depTimes?.actual
 			},
 			destination: {
 				code: destCode,
 				...place.destination,
-				estimatedTime: arrival?.[1]
+				estimatedTime: arrival,
+				scheduledTime: arrTimes?.planned
 			},
 			altitude: altitude ? `${altitude[1].replace(/,/g, "")} ${altitude[2] === "feet" ? "ft" : altitude[2]}` : void 0,
 			speed: speed?.[1],
@@ -437,9 +551,30 @@ function detectFlight(text) {
 		})
 	};
 }
+var PLAN_STEP = /^(?:#{1,4}\s+)?(?:\d+[.)]\s+)?(?:étape|etape|step|phase|week|semaine|semana|settimana|jour|day|dia|día|giorno|mois|month|mês|mes|mese|stage|etapa|fase|sprint|milestone|jalon)\s*(\d+)(?:\s*[-–]\s*\d+)?\s*[:.–—-]?\s*(.+)$/iu;
+/** A plan written as step headings (≥3), the way agents answer "give me a plan…". */
+function detectPlan(text) {
+	const steps = text.split("\n").map((l) => l.trim().replace(/\*\*|__/g, "")).filter((l) => /^(?:#{1,4}\s|\d+[.)]\s|[\p{L}])/u.test(l)).map((l) => l.match(PLAN_STEP)).filter((m) => !!m && m[2].trim().length > 1);
+	if (steps.length < 3) return void 0;
+	const aim = text.match(/\b(?:plan|roadmap|feuille de route|programme|plano|plan de acción|piano)\b[^.:\n]{0,40}?\b(?:pour|to|for|de|para|per)\s+([^.:\n]{3,120})/iu)?.[1]?.trim();
+	const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+	return {
+		type: "task_roadmap",
+		data: compact({
+			projectTitle: aim && aim.length <= 40 ? cap(aim) : "Plan",
+			description: aim && aim.length > 40 ? cap(aim) : void 0,
+			progressPercent: 0,
+			tasks: steps.map((m, i) => ({
+				id: `step-${i}`,
+				title: m[2].replace(/\s*:\s*$/, "").trim(),
+				completed: false
+			}))
+		})
+	};
+}
 function detectTasks(text) {
 	const lines = text.split("\n").filter((l) => /^\s*[-*]\s*\[([ xX])\]\s+(.*)/.test(l));
-	if (lines.length < 2) return void 0;
+	if (lines.length < 2) return detectPlan(text);
 	const tasks = lines.map((line, idx) => {
 		const m = line.match(/^\s*[-*]\s*\[([ xX])\]\s+(.*)/);
 		let title = m[2].trim();
@@ -466,35 +601,46 @@ function detectTasks(text) {
 		})
 	};
 }
+var INGREDIENTS_HEAD = /^(?:ingredients?|ingrédients?|ingredientes|ingredienti)\b/i;
+var STEPS_HEAD = /^(?:instructions?|steps|directions|method|preparation|préparation|étapes|etapes|recette|modo de preparo|preparo|preparación|instrucciones|procedimento|preparazione)\b/i;
+/** "### **Ingrédients (pour 4)** :" → "Ingrédients (pour 4)". */
+var headingText = (line) => line.replace(/^#+\s*/, "").replace(/\*\*|__/g, "").replace(/\s*:\s*$/, "").trim();
 function detectRecipe(text) {
-	if (!/\b(ingredients?|recipe)\b/i.test(text)) return void 0;
+	if (!words("ingredients?|recipe|recette|ingrédients?|receita|ingredientes|receta|ricetta|ingredienti").test(text)) return void 0;
 	const ingredients = [];
 	const steps = [];
 	let section = "none";
 	for (const raw of text.split("\n")) {
 		const line = raw.trim();
-		if (/^#*\s*ingredients\b/i.test(line)) {
+		const isHeading = /^#+\s/.test(line) || /^(?:\*\*|__)?[\p{L} ()\d,'’-]{3,60}(?:\*\*|__)?\s*:?\s*$/u.test(line) && !/^[-*•\d]/.test(line);
+		const head = headingText(line);
+		if (isHeading && INGREDIENTS_HEAD.test(head)) {
 			section = "ingredients";
 			continue;
 		}
-		if (/^#*\s*(instructions|steps|directions|method|preparation)\b/i.test(line)) {
+		if (isHeading && STEPS_HEAD.test(head)) {
 			section = "steps";
 			continue;
 		}
-		if (section === "ingredients" && /^[-*•]\s+/.test(line)) ingredients.push({ item: line.replace(/^[-*•]\s+/, "") });
-		else if (section === "steps" && /^(?:\d+[.)]|[-*•])\s+/.test(line)) steps.push(line.replace(/^(?:\d+[.)]|[-*•])\s+/, ""));
+		if (/^#+\s/.test(line)) {
+			section = "none";
+			continue;
+		}
+		const item = line.replace(/^(?:\d+[.)]|[-*•])\s+/, "").replace(/\*\*|__|\*/g, "").trim();
+		if (section === "ingredients" && /^[-*•]\s+/.test(line) && item) ingredients.push({ item });
+		else if (section === "steps" && /^(?:\d+[.)]|[-*•])\s+/.test(line) && item) steps.push(item);
 	}
 	if (ingredients.length < 2) return void 0;
-	const titleM = firstMatch(text, /\brecipe[:\s]+([^.\n]+)/i, /^#+\s*(?!ingredients|instructions|steps|directions|method|preparation)(.+)$/im);
-	const time = (label) => text.match(new RegExp(`${label.source}[:\\s]*(\\d+\\s*(?:min(?:ute)?s?|h(?:ours?|rs?)?)\\b)`, "i"))?.[1];
+	const titleM = firstMatch(text, /\b(?:recipe for|recette (?:de |des |du |d['’])|receita de |receta de |ricetta (?:di |del |della ))([^.,:\n!]{2,40})/iu, /\b(?:an? |une? |la |le )?(?:classic,?\s+|simple,?\s+|easy,?\s+|fresh,?\s+)*([\p{L}][\p{L} -]{2,30}?) recipe\b/iu, /\b(?:recette|recipe|receita|receta|ricetta)\b[^.\n]{0,80}?\b(?:de|for|of|di)\s+(?:(?:une|un|des|la|le|les|some)\s+)?(?:(?:quinzaine|douzaine|dizaine|dozen)\s+(?:de\s+|of\s+)?)?(\p{L}[\p{L}'’-]{2,})/iu, /^#+[ \t]*(?![ \t])(?!ingr|instr|steps|direct|method|pr[ée]par|[ée]tapes)(.+)$/imu);
+	const time = (label) => text.match(new RegExp(`${label.source}[^\\d\\n]{0,12}(\\d+\\s*(?:min(?:ute)?s?|h(?:ours?|rs?|eures?)?)\\b)`, "iu"))?.[1];
 	const difficulty = text.match(/\b(easy|medium|hard)\b/i)?.[1];
-	const servings = firstMatch(text, /\bserves\s*(\d+)/i, /\b(\d+)\s*servings?\b/i);
+	const servings = firstMatch(text, /\bserves\s*(\d+)/i, /\b(\d+)\s*servings?\b/i, /\bpour (?:environ )?(\d+)(?:\s*(?:à|-)\s*\d+)?\s/iu, /\b(\d+)\s*(?:personnes|parts|portions|porções|porciones|persone)\b/iu);
 	return {
 		type: "recipe",
 		data: compact({
-			title: titleM ? titleM[1].replace(/[:#*]/g, "").trim() : "Recipe",
-			prepTime: time(/\bprep(?:aration)?\s*time/),
-			cookTime: time(/\bcook(?:ing)?\s*time/),
+			title: titleM ? titleM[1].replace(/[:#*]/g, "").trim().replace(/^\p{Ll}/u, (c) => c.toUpperCase()) : "Recipe",
+			prepTime: time(/\b(?:prep(?:aration)?\s*time|temps de pr[ée]paration|pr[ée]paration|tempo de preparo|tiempo de preparaci[óo]n)/),
+			cookTime: time(/\b(?:cook(?:ing)?\s*time|cuisson|temps de cuisson|cozimento|cocci[óo]n|cottura)/),
 			difficulty: difficulty ? difficulty[0].toUpperCase() + difficulty.slice(1).toLowerCase() : void 0,
 			servings: servings ? parseInt(servings[1], 10) : void 0,
 			ingredients,
@@ -545,27 +691,63 @@ var LEAGUES = [
 	"Taça de Portugal",
 	"Copa Libertadores"
 ];
+var TEAM = String.raw`\p{Lu}(?:[\p{L}'’-]|\.(?=\p{L}))*(?:[ \t]+(?:(?:de|du|des|of|the|di|da|do|del|y|&)[ \t]+)?\p{Lu}(?:[\p{L}'’-]|\.(?=\p{L}))*){0,4}`;
+var PRONOUN = /^(?:they|he|she|it|ils|elles|il|elle|eles|elas|ellos|ellas|loro)$/i;
+var WON_BY = new RegExp(String.raw`(?:won by|remport[ée]e? par|gagn[ée]e? par|vencid[ao] pel[ao]|ganad[ao] por|vint[ao] da(?:l|lla)?)\s+(?:the\s+|le\s+|la\s+|l['’])?(${TEAM})`, "iu");
+var ARTICLE = String.raw`(?:(?:the|le|la|les|l['’]|el|o|a|il|lo)\s*)?`;
+var SCORE = String.raw`(\d{1,3})\s*[-–—:]\s*(\d{1,3})`;
+var WIN = String.raw`(?:won|beat|defeated|edged(?: past)?|thrashed|overcame|s['’]est impos[ée]e?|a battu|a gagn[ée]|a dominé|venceu|derrotou|ganó|venció|ha vinto|ha battuto)`;
+var LOSS = String.raw`(?:fell|lost|were beaten|was beaten|went down|s['’]est inclin[ée]e?|a perdu|perdeu|perdió|ha perso)`;
+var DRAW = String.raw`(?:drew|tied|a fait match nul|ont fait match nul|empatou|empató|ha pareggiato)`;
+var VS = String.raw`(?:against|over|to|with|face (?:à|au)|contre|devant|contra|ante|frente a|a|al|contro)`;
 function detectSports(text) {
-	const m = text.match(/(\p{Lu}[\p{L}.'’ ]*?)\s+(\d{1,3})\s*[-–:]\s*(\d{1,3})\s+(\p{Lu}[\p{L}.'’ ]*?)(?=\s*[.,;!\n]|\s+(?:at|in|on|after|with|to)\b|$)/u);
-	if (!m) return void 0;
-	if (!/\b(vs|versus|match|game|score|goals?|ft|ht|full[- ]time|half[- ]time|final|league|cup|won|beat|points)\b/i.test(text)) return void 0;
-	const status = /\bfull[- ]time\b|\bFT\b/i.test(text) ? "Full time" : /\bhalf[- ]time\b|\bHT\b/i.test(text) ? "Half time" : text.match(/\b(\d{1,3})['’]/)?.[0] ?? (/\bfinal score\b|\bfinal\b/i.test(text) ? "Final" : /\blive\b/i.test(text) ? "Live" : void 0);
-	return {
+	if (!words("vs|versus|match|game|score|goals?|ft|ht|full[- ]time|half[- ]time|final|league|cup|won|beat|points|rencontre|but|buts|victoire|défaite|ligue|coupe|jogo|partida|gol|partido|liga|partita|campionato").test(text)) return void 0;
+	const league = LEAGUES.find((l) => new RegExp(`\\b${l}\\b`, "i").test(text));
+	const status = /\bfull[- ]time\b|\bFT\b/i.test(text) ? "Full time" : /\bhalf[- ]time\b|\bHT\b|mi-temps/i.test(text) ? "Half time" : text.match(/\b(\d{1,3})['’](?!\s*s\b)/)?.[0] ?? (/\bfinal score\b|\bfinal\b/i.test(text) ? "Final" : /\blive\b|en direct/i.test(text) ? "Live" : void 0);
+	const clean = (name) => name.replace(/^(?:(?:the|le|la|les|el|o|il|lo)\s+|l['’])/i, "").trim();
+	const resolve = (name) => PRONOUN.test(name.trim()) ? text.match(WON_BY)?.[1] ?? name : name;
+	const penalties = /on penalties|aux tirs au but|aux penalties|nos p[êe]naltis|en (?:los )?penaltis|ai rigori/i.test(text);
+	const result = (a, sa, b, sb, ended) => ({
 		type: "sports",
 		data: compact({
-			league: LEAGUES.find((l) => new RegExp(`\\b${l}\\b`, "i").test(text)),
-			status,
+			league,
+			status: penalties ? "Final · penalties" : status ?? (ended ? "Full time" : void 0),
 			teamA: {
-				name: m[1].trim(),
-				score: parseInt(m[2], 10)
+				name: clean(resolve(a)),
+				score: sa
 			},
 			teamB: {
-				name: m[4].trim(),
-				score: parseInt(m[3], 10)
+				name: clean(b),
+				score: sb
 			}
 		})
-	};
+	});
+	const win = text.match(new RegExp(String.raw`(${TEAM})\s+${WIN}\s+(?:par\s+|by\s+|por\s+|per\s+)?${SCORE}\s+${VS}\s+${ARTICLE}(${TEAM})`, "u")) ?? text.match(new RegExp(String.raw`(${TEAM})\s+${WIN}\s+${ARTICLE}(${TEAM})\s+(?:par\s+|by\s+|por\s+|per\s+)?${SCORE}`, "u"));
+	if (win) {
+		const named = win[2] && !/^\d/.test(win[2]) ? {
+			a: win[1],
+			b: win[2],
+			x: +win[3],
+			y: +win[4]
+		} : {
+			a: win[1],
+			b: win[4],
+			x: +win[2],
+			y: +win[3]
+		};
+		return result(named.a, Math.max(named.x, named.y), named.b, Math.min(named.x, named.y), true);
+	}
+	const loss = text.match(new RegExp(String.raw`(${TEAM})\s+${LOSS}\s+${SCORE}\s+${VS}\s+${ARTICLE}(${TEAM})`, "u"));
+	if (loss) return result(loss[1], Math.min(+loss[2], +loss[3]), loss[4], Math.max(+loss[2], +loss[3]), true);
+	const draw = text.match(new RegExp(String.raw`(${TEAM})\s+${DRAW}\s+${SCORE}\s+${VS}\s+${ARTICLE}(${TEAM})`, "u"));
+	if (draw) return result(draw[1], +draw[2], draw[4], +draw[3], true);
+	const m = text.match(/(\p{Lu}[\p{L}.'’ ]*?)\s+(\d{1,3})\s*[-–:]\s*(\d{1,3})\s+(\p{Lu}[\p{L}.'’ ]*?)(?=\s*[.,;!\n]|\s+(?:at|in|on|after|with|to)\b|$)/u);
+	if (!m) return void 0;
+	return result(m[1], parseInt(m[2], 10), m[4], parseInt(m[3], 10), false);
 }
+var LANGUAGE_NAMES = words("english|anglais|inglês|inglés|inglese|french|français|francês|francés|francese|spanish|espagnol|espanhol|español|spagnolo|portuguese|portugais|português|portugués|portoghese|italian|italien|italiano|german|allemand|alemão|alemán|tedesco|japanese|japonais|japonês|japonés|giapponese|chinese|chinois|chinês|chino|cinese|mandarin|cantonese|korean|coréen|coreano|arabic|arabe|árabe|arabo|russian|russe|russo|ruso|dutch|néerlandais|holandês|neerlandés|olandese|hindi|turkish|turc|turco|greek|grec|grego|griego|greco|polish|polonais|polaco|polacco|swedish|suédois|sueco|svedese");
+var TRANSLATE_VERB = /(?:se traduit(?:\s+\p{L}+)?\s+par|(?:is|are)\s+(?:most\s+|usually\s+|simply\s+)?(?:commonly\s+)?translated\s+(?:as|to|into)|translat(?:es|ed)\s+(?:as|to)|se dit|on dit|you(?:'d| would)? say|se diz|traduz-se (?:como|por)|é traduzido como|se traduce(?:\s+\p{L}+)?\s+(?:como|por)|si traduce(?:\s+\p{L}+)?\s+(?:con|come))\s*:?/iu;
+var unquote = (t) => t.replace(/^[\s«"“‘'*]+|[\s»"”’'*]+$/g, "").trim();
 function detectTranslation(text) {
 	const pair = text.match(/\b(?:original|source)\s*(?:\(([^)]+)\))?\s*:\s*([\s\S]+?)\n+\s*(?:translation|translated)\s*(?:\(([^)]+)\))?\s*:\s*([\s\S]+?)\s*$/i);
 	if (pair) return {
@@ -586,31 +768,73 @@ function detectTranslation(text) {
 			translatedText: inline[3]
 		}
 	};
+	const verb = TRANSLATE_VERB.exec(text);
+	if (!verb) return void 0;
+	const rest = text.slice(verb.index + verb[0].length);
+	const first = rest.match(/\*\*([^*\n]{1,160})\*\*|«\s*([^»\n]{1,160})»|"([^"\n]{1,160})"|“([^”\n]{1,160})”/);
+	if (!first || (first.index ?? 0) > 240) return void 0;
+	const translatedText = unquote(first[1] ?? first[2] ?? first[3] ?? first[4] ?? "");
+	if (!translatedText) return void 0;
+	const afterTranslation = rest.slice((first.index ?? 0) + first[0].length);
+	const phonetic = afterTranslation.match(/^\s*\(\s*\*?([^)*\n]{1,80}?)\*?\s*\)/)?.[1]?.trim();
+	const alternatives = [...afterTranslation.matchAll(/\*\*([^*\n]{1,120})\*\*/g)].map((m) => unquote(m[1])).filter((t, i, all) => t && t !== translatedText && all.indexOf(t) === i).slice(0, 4);
+	const before = text.slice(0, verb.index);
+	const sourceText = [...before.matchAll(/["“«‘']\s*([^"”»’'\n]{2,120}?)\s*["”»’']/g)].map((m) => m[1].trim()).pop();
+	const targetLang = (before.match(new RegExp(String.raw`\b(?:in|en|em|al|into|to)\s+(${LANGUAGE_NAMES.source})`, "iu")) ?? text.match(new RegExp(String.raw`\b(?:in|en|em|al|into|to)\s+(${LANGUAGE_NAMES.source})`, "iu")))?.[1];
+	return {
+		type: "translation",
+		data: compact({
+			sourceText,
+			targetLang,
+			translatedText,
+			phonetic,
+			alternatives: alternatives.length ? alternatives : void 0
+		})
+	};
+}
+/** The first number in a table cell, any locale: "66 422 469", "$260.17 billion", "+0,27 %". */
+function cellNumber(cell) {
+	const m = cell.replace(/\*\*|__/g, "").match(/[-+−]?\s?[$€£]?\s?(\d{1,3}(?:[   .,']\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)/);
+	if (!m) return void 0;
+	const n = localeNumber(m[1]);
+	return n === void 0 ? void 0 : /^[-−]/.test(m[0].trim()) ? -n : n;
 }
 function detectChart(text) {
 	const rows = text.split("\n").filter((l) => l.trim().startsWith("|") && l.trim().endsWith("|"));
 	if (rows.length < 4) return void 0;
-	const cells = (row) => row.trim().slice(1, -1).split("|").map((c) => c.trim());
+	const cells = (row) => row.trim().slice(1, -1).split("|").map((c) => c.replace(/\*\*|__/g, "").trim());
 	const headers = cells(rows[0]);
 	if (headers.length < 2) return void 0;
+	const body = rows.slice(1).filter((r) => !/^\|\s*:?-{2,}/.test(r.trim())).map(cells);
+	let col = -1;
+	let best = 0;
+	for (let c = 1; c < headers.length; c++) {
+		const count = body.filter((r) => cellNumber(r[c] ?? "") !== void 0).length;
+		if (count > best) {
+			best = count;
+			col = c;
+		}
+	}
+	if (col < 0 || best < 2) return void 0;
 	const labels = [];
 	const values = [];
-	for (const row of rows.slice(2)) {
-		const [label, value] = cells(row);
-		if (!label || value === void 0) continue;
-		if (!/^[-+]?\$?[\d,]+(?:\.\d+)?%?$/.test(value)) continue;
-		labels.push(label);
-		values.push(num(value.replace(/[$%]/g, "")));
+	for (const r of body) {
+		const v = cellNumber(r[col] ?? "");
+		if (!r[0] || v === void 0) continue;
+		labels.push(r[0]);
+		values.push(v);
 	}
 	if (values.length < 2) return void 0;
+	const yearly = labels.every((l) => /\b(?:19|20)\d{2}\b/.test(l));
+	const heading = text.match(/^#+\s*(.+)$/m)?.[1]?.replace(/\*\*|__/g, "").trim();
 	return {
 		type: "chart",
 		data: {
-			title: headers[1],
-			chartType: values.length <= 6 ? "bar" : "line",
+			title: heading && heading.length <= 60 ? heading : headers[col],
+			chartType: yearly || values.length > 6 ? "line" : "bar",
 			labels,
 			datasets: [{
-				label: headers[1],
+				label: headers[col],
 				data: values
 			}]
 		}
@@ -625,6 +849,7 @@ function detectSpecialContent(rawText, _agentName) {
 	const text = rawText.trim();
 	const json = detectJson(text);
 	if (json !== void 0) return json;
+	const plain = text.replace(/\*\*|__/g, "");
 	for (const detector of [
 		detectSystem,
 		detectWallet,
@@ -635,13 +860,12 @@ function detectSpecialContent(rawText, _agentName) {
 		detectRecipe,
 		detectMedia,
 		detectSports,
-		detectTranslation,
 		detectChart
 	]) {
-		const found = detector(text);
+		const found = detector(plain);
 		if (found) return found;
 	}
-	return null;
+	return detectTranslation(text) ?? null;
 }
 //#endregion
 export { detectSpecialContent };

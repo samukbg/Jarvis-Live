@@ -29,7 +29,7 @@ export const FinanceCard: React.FC<{ data: FinanceData; live?: CardLive }> = ({ 
   const pct = rangeChange !== undefined && first ? (rangeChange / first) * 100 : data.changePercent;
   const up = pct !== undefined ? pct >= 0 : change !== undefined ? change >= 0 : undefined;
   const accent = up === undefined ? palette.accent : up ? palette.success : palette.danger;
-  const cur = data.currency && data.currency !== 'USD' ? `${data.currency} ` : '$';
+  const cur = data.currency && data.currency !== 'USD' ? ({ EUR: '€', GBP: '£' } as Record<string, string>)[data.currency] ?? `${data.currency} ` : '$';
   const scrubbedValue = scrub !== null ? values[scrub] : undefined;
   const scrubbedLabel = scrub !== null ? (series && active ? timeLabel(series[scrub].t, active) : legacy?.[scrub].time) : undefined;
 
