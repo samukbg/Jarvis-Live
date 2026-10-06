@@ -38,6 +38,7 @@ import { PhoneBridge, PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from './device/ph
 import { isAuthorized } from './shared/auth.js';
 import { createStatusCollector } from './system/serverStatus.js';
 import { createAgentDetector } from './agents/detect.js';
+import { agyModelArgs } from './agents/agyModel.js';
 import { wslDistro, wslRoots } from './system/wslDistro.js';
 import { pickAvatar } from './avatar/pickAvatar.js';
 import { splitHermesModel } from './agents/hermesModel.js';
@@ -895,15 +896,10 @@ let activeModel = 'gemini';
 let activeLanguage = 'en';
 let selectedModels = { hermes: 'nvidia/nemotron-3-super-120b-a12b:free', gemini: 'gemini-3.8-flash', claude: 'claude-3-haiku-20240307' };
 
-function normalizeGeminiModel(m) {
-  if (!m) return 'gemini-3.6-flash';
-  const clean = m.toLowerCase().trim();
-  if (clean.includes('3.6') || clean === 'flash') return 'gemini-3.6-flash';
-  if (clean.includes('3.5')) return 'gemini-3.5-flash';
-  if (clean.includes('3.1') || clean.includes('pro')) return 'gemini-3.1-pro';
-  if (clean.includes('2.0')) return 'gemini-2.0-flash';
-  if (clean.startsWith('gemini')) return clean.split(' ')[0];
-  return 'gemini-3.6-flash';
+/** `agy` arguments for the selected Gemini model, valid for this agy's model list (agents/agyModel.js). */
+async function agyArgs() {
+  const models = (await detectAgents().catch(() => ({ agents: [] }))).agents.find((a) => a.id === 'gemini')?.models || [];
+  return agyModelArgs(selectedModels.gemini, models);
 }
 let lastUserVoiceCommand = '';
 let micActive = true;
@@ -1507,6 +1503,7 @@ const workerContext = {
   broadcastAgentStatus,
   broadcastAlert,
   getSelectedModel: (agent) => selectedModels[agent],
+  agyModelArgs: () => agyArgs(),
   buildTaskQuery,
   registerProcess: (proc) => activeProcesses.add(proc),
   unregisterProcess: (proc) => activeProcesses.delete(proc),
@@ -1713,15 +1710,11 @@ User: ${command}`;
       let isFirstChunk = true;
       
       if (activeModel === 'gemini') {
-        const geminiModel = normalizeGeminiModel(selectedModels.gemini);
+        const modelArgs = await agyArgs();
         // The prompt goes on stdin (as in AgyWorker): on Windows the CLI runs through
         // cmd.exe, which split `-p <prompt>` into words ("unexpected argument
         // 'instructions:'") and would run anything after a newline or `&` in user text.
-        proc = spawn(getCrossPlatformCommand('agy'), [
-          '--dangerously-skip-permissions',
-          '--model', geminiModel,
-          '--effort', 'medium',
-        ], getSpawnOptions());
+        proc = spawn(getCrossPlatformCommand('agy'), ['--dangerously-skip-permissions', ...modelArgs], getSpawnOptions());
         proc.stdin?.on('error', () => {});
         proc.stdin?.end(sysPrompt + '\n');
       } else if (activeModel === 'codex') {

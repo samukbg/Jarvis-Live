@@ -1,5 +1,6 @@
 import { Modality } from '@google/genai';
 import { PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from '../../device/phoneActions.js';
+import { TranscriptBuffer } from '../transcript.js';
 
 export class GeminiLiveProvider {
   constructor(options) {
@@ -16,6 +17,15 @@ export class GeminiLiveProvider {
     this.session = null;
     this.connecting = false;
     this.geminiState = 'IDLE';
+    // Live transcribes in fragments: one line per utterance, not one per fragment.
+    this.userSpeech = new TranscriptBuffer();
+    this.jarvisSpeech = new TranscriptBuffer();
+  }
+
+  /** The user's utterance is over (Jarvis answers, calls a tool, or the turn ends): log it once. */
+  flushUserSpeech() {
+    const text = this.userSpeech.flush();
+    if (text) this.broadcast({ type: 'voice_transcript', text, role: 'user', is_final: true });
   }
 
   async connect(targetAgent = 'agy') {
@@ -80,9 +90,17 @@ export class GeminiLiveProvider {
           },
           onmessage: async (message) => {
             const sc = message.serverContent;
+            // What the user says, as it is recognised (the live caption), then once in full.
+            if (sc?.inputTranscription?.text) {
+              const text = this.userSpeech.add(sc.inputTranscription.text);
+              if (text) this.broadcast({ type: 'voice_transcript', text, role: 'user', is_final: false });
+            }
+            if (sc?.inputTranscription?.finished) this.flushUserSpeech();
+            if (sc?.modelTurn || sc?.outputTranscription || message.toolCall) this.flushUserSpeech();
             if (sc) {
               // Clear audio on interruptions
               if (sc.interrupted) {
+                this.jarvisSpeech.flush(); // cut off: the next answer starts a new line
                 this.broadcast({ type: 'gemini_live_interrupt' });
                 return;
               }
@@ -111,8 +129,8 @@ export class GeminiLiveProvider {
               
               // Show Gemini's spoken transcript in the UI
               if (sc.outputTranscription?.text) {
-                const t = sc.outputTranscription.text.trim();
-                if (t) this.broadcast({ type: 'voice_transcript', text: t, role: 'assistant', is_final: sc.turnComplete || false });
+                const text = this.jarvisSpeech.add(sc.outputTranscription.text);
+                if (text) this.broadcast({ type: 'voice_transcript', text, role: 'assistant', is_final: false });
               }
             }
 
@@ -178,15 +196,14 @@ export class GeminiLiveProvider {
 
 
             
-            if (sc?.turnComplete && this.broadcastAgentStatus) {
-              this.geminiState = 'IDLE';
-              this.broadcastAgentStatus(this.targetAgent, 'IDLE');
-            }
-            
-            // Show user's speech transcript
-            if (sc?.inputTranscription?.text) {
-              const t = sc.inputTranscription.text.trim();
-              if (t) this.broadcast({ type: 'voice_transcript', text: t, role: 'user', is_final: true });
+            if (sc?.turnComplete) {
+              this.flushUserSpeech();
+              const said = this.jarvisSpeech.flush();
+              if (said) this.broadcast({ type: 'voice_transcript', text: said, role: 'assistant', is_final: true });
+              if (this.broadcastAgentStatus) {
+                this.geminiState = 'IDLE';
+                this.broadcastAgentStatus(this.targetAgent, 'IDLE');
+              }
             }
           },
           onerror: (e) => {

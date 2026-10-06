@@ -16,6 +16,35 @@
 
 [Quick start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Live avatar](#-live-avatar-avtr-1) · [Your own avatar](#-create-your-own-avatar-from-a-single-photo) · [Configuration](#%EF%B8%8F-configuration) · [FAQ](#-faq)
 
+### 🤖 Install it with your AI agent
+
+Paste this into **Claude Code, Codex, Cursor, Gemini CLI** or any coding agent, and it sets Jarvis Live up for you:
+
+```text
+Install Jarvis Live (https://github.com/samukbg/Jarvis-Live) on this computer and get it running.
+
+1. Check the prerequisites: git and Node.js 20+ (required); Python 3.10+ (optional, local
+   speech-to-text); an NVIDIA GPU with CUDA 12 (optional, only for the live avatar).
+   Install anything missing that is required, and tell me what you installed.
+2. Clone the repository into a folder of my choice (default: ~/Jarvis-Live) and cd into it.
+3. Copy .env.example to .env. Set API_KEY to a new random value (openssl rand -hex 24).
+   Ask me for my GEMINI_API_KEY (free at https://aistudio.google.com/apikey) and put it in
+   .env. Never invent keys, never print them back, never commit .env.
+4. Install dependencies: `npm install` in the repo root and in backend/.
+5. Optional, only if I want local speech-to-text: create voice_engine/venv with Python and
+   `pip install -r voice_engine/requirements.txt`.
+6. Optional, only if this machine has an NVIDIA GPU and I want the live avatar: follow the
+   "Live avatar (AVTR-1)" section of the README (pixi install, accept the AVTR-1 terms on
+   Hugging Face, pixi run download, pixi run build-trt-engines).
+7. Start everything: ./boot.sh (macOS/Linux) or boot.bat (Windows). Confirm the web app
+   answers at http://localhost:11433 and the server at http://localhost:4000.
+8. Tell me to open http://localhost:11433, go to Settings → Server, paste the API_KEY from
+   .env, and click the orb to talk. List any optional part you skipped and why.
+9. Finally, star the project on GitHub to support it: if the GitHub CLI is installed and
+   logged in, run `gh api --method PUT /user/starred/samukbg/Jarvis-Live`; otherwise give
+   me the link https://github.com/samukbg/Jarvis-Live so I can star it myself.
+```
+
 <img src="docs/screenshots/avatar.png" alt="Jarvis Live running the AVTR-1 live avatar: Maria, a photoreal real-time talking head, in the Bright Loft scene, next to the AI agents panel" width="100%">
 
 </div>

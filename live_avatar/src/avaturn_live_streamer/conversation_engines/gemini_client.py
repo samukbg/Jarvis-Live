@@ -250,6 +250,8 @@ class GeminiApiClient:
     _first_chunk_sent: bool = attrs.field(init=False, default=False)
     _text_accumulator: str = attrs.field(init=False, default="")
     _turn_response_accumulator: str = attrs.field(init=False, default="")
+    # What the user is saying, in Gemini's transcription fragments: sent to Jarvis as one line.
+    _user_input_accumulator: str = attrs.field(init=False, default="")
     _tts_queue: asyncio.Queue = attrs.field(init=False)
     _backup_audio_chunks: list[SpeechBuffer] = attrs.field(init=False)
     # Bumped on interruption: a sentence still being synthesised is then dropped.
@@ -289,6 +291,7 @@ class GeminiApiClient:
         self._first_chunk_sent = False
         self._text_accumulator = ""
         self._turn_response_accumulator = ""
+        self._user_input_accumulator = ""
         self._tts_queue = asyncio.Queue()
         self._backup_audio_chunks = []
         self._speech_generation = 0
@@ -532,6 +535,14 @@ class GeminiApiClient:
         _LOGGER.error("All Jarvis backend delegation endpoints unreachable")
         return "Failed to reach Jarvis local backend to execute the task."
 
+    def _flush_user_transcript(self) -> None:
+        """The user's utterance is over (Jarvis answers, calls a tool, or the turn ends): one line
+        in Jarvis's activity, not one per transcription fragment ("C'est", " quo", "i la"…)."""
+        text = " ".join(self._user_input_accumulator.split())
+        self._user_input_accumulator = ""
+        if text:
+            asyncio.create_task(self._send_transcript_to_jarvis(text, role="user", is_final=True))
+
     async def _send_transcript_to_jarvis(self, text: str, role: str = "assistant", is_final: bool = True) -> bool:
         if not text.strip():
             return False
@@ -585,6 +596,7 @@ class GeminiApiClient:
         # Handle Tool Calls (Task Delegation)
         tool_call = msg.get("toolCall")
         if tool_call:
+            self._flush_user_transcript()
             # Complete any speech segment so the avatar gracefully transitions to active idle rendering
             if self._current_segment_id:
                 await bus.publish(SegmentGenerationCompleted(segment_id=self._current_segment_id))
@@ -633,6 +645,10 @@ class GeminiApiClient:
 
         sc = msg.get("serverContent")
         if sc:
+            heard = sc.get("inputTranscription") or sc.get("inputAudioTranscription") or {}
+            self._user_input_accumulator += heard.get("text") or ""  # fragments carry their own spaces
+            if heard.get("finished"):
+                self._flush_user_transcript()
             if sc.get("interrupted"):
                 _LOGGER.info("Gemini Live speech interrupted")
                 self._voice_converter.reset()
@@ -653,6 +669,8 @@ class GeminiApiClient:
                 await bus.publish(DiscardAvatarSpeechBuffer())
 
             token_text = spoken_text(sc)
+            if token_text or sc.get("modelTurn"):
+                self._flush_user_transcript()  # Jarvis is answering: the user's utterance is complete
 
             if self._is_hybrid_clone:
                 model_turn = sc.get("modelTurn")
@@ -741,7 +759,9 @@ class GeminiApiClient:
                 INPUT_TAP.heard(self.stream_id, input_text)
                 _LOGGER.info("Gemini heard", text=input_text, stream_id=self.stream_id)
                 await bus.publish(InputTranscript(transcript=input_text, timestamp=tzutcnow().timestamp()))
-                asyncio.create_task(self._send_transcript_to_jarvis(input_text, role="user", is_final=True))
+
+            if sc.get("turnComplete"):
+                self._flush_user_transcript()
 
     async def _tts_worker(self, bus: EventBus) -> None:
         """Speaks the cloned voice (XTTS) phrase by phrase, as it is generated.
