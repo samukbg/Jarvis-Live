@@ -36,6 +36,7 @@ import { registerCardRoutes } from './cards/index.js';
 import { GeminiLiveProvider } from './conversation/providers/GeminiLiveProvider.js';
 import { PhoneBridge, PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from './device/phoneActions.js';
 import { isAuthorized } from './shared/auth.js';
+import { callbackUrl, createAvatarSource, lanAddress } from './avatar/avatarSource.js';
 import { createStatusCollector } from './system/serverStatus.js';
 import { createAgentDetector } from './agents/detect.js';
 import { agyModelArgs } from './agents/agyModel.js';
@@ -139,7 +140,14 @@ const SERVER_VERSION = process.env.JARVIS_VERSION || (() => { try { return execS
 let configuredStreamerUrl = (process.env.STREAMER_URL || process.env.LIVE_AVATAR_URL || process.env.AVATAR_SERVER_URL || '').trim();
 global.AVATAR_SERVER_URL = configuredStreamerUrl;
 
+// Settings → Live avatar → Avatar server: your own AVTR-1 server, else the default above
+// (avatar/avatarSource.js; saved in the data folder).
+const avatarSource = createAvatarSource({ file: path.join(process.env.JARVIS_DATA_DIR || path.resolve(__dirname, '..'), 'avatar-source.json') });
+const ownAvatarServer = () => { const s = avatarSource.get(); return s.mode === 'own' ? s : null; };
+
 function getStreamerCandidateUrls(reqHost = '') {
+  const own = ownAvatarServer();
+  if (own) return [own.url];
   const candidates = [];
   const hostLower = String(reqHost || '').toLowerCase();
 
@@ -168,6 +176,7 @@ function getStreamerCandidateUrls(reqHost = '') {
 
 async function fetchFromStreamer(endpointPath, options = {}, reqHost = '') {
   const candidates = getStreamerCandidateUrls(reqHost);
+  const own = ownAvatarServer();
   let lastError = null;
 
   for (const base of candidates) {
@@ -175,6 +184,8 @@ async function fetchFromStreamer(endpointPath, options = {}, reqHost = '') {
     try {
       const resp = await fetch(targetUrl, {
         ...options,
+        // Your own avatar server, when it's another Jarvis server: its API key.
+        headers: own?.key && base === own.url ? { ...(options.headers || {}), 'x-api-key': own.key } : options.headers,
         signal: options.signal || AbortSignal.timeout(12000)
       });
       return resp;
@@ -287,6 +298,14 @@ app.post(['/probe-offer', '/api/avatar/probe-offer', '/api/avatar/probe-offer/']
  * with this server's API_KEY. Only the owner may choose it: anyone else could point it at
  * their own host and collect the key.
  */
+/** pinBackendUrl, except with your own avatar server: it calls this server back with its key. */
+function pinCallback(engine, req) {
+  const own = ownAvatarServer();
+  if (!own || !engine) return pinBackendUrl(engine, req);
+  const url = callbackUrl({ target: own.url, port, lan: lanAddress(), tunnelUrl: null, envUrl: process.env.JARVIS_BACKEND_URL });
+  if (url) Object.assign(engine, { jarvis_backend_url: url, jarvis_backend_key: process.env.API_KEY });
+}
+
 function pinBackendUrl(engine, req) {
   if (!engine) return;
   const isOwner = (req.headers['x-api-key'] || req.query.api_key) === process.env.API_KEY;
@@ -342,7 +361,7 @@ app.post(['/offer', '/api/avatar/offer', '/api/avatar/offer/'], async (req, res)
       payload.engine.api_key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
     }
     if (payload.engine) payload.engine = { ...payload.engine };
-    pinBackendUrl(payload.engine, req);
+    pinCallback(payload.engine, req);
     const avatar = await useAvailableAvatar(payload, req);
     const response = await fetchFromStreamer('/offer', {
       method: 'POST',
@@ -366,7 +385,7 @@ app.post('/api/avatar/watch/start', async (req, res) => {
     const body = { ...(req.body ?? {}) };
     if (body.engine) {
       body.engine = { ...body.engine };
-      pinBackendUrl(body.engine, req);
+      pinCallback(body.engine, req);
     }
     await useAvailableAvatar(body, req);
     const r = await fetchFromStreamer('/api/avatar/watch/start', {
@@ -2232,6 +2251,58 @@ const serverStatus = createStatusCollector({
     minFreeVramMB: Number(process.env.AVATAR_MIN_FREE_VRAM_MB || 4000),
     maxGpuUtilPct: Number(process.env.AVATAR_MAX_GPU_UTIL_PCT || 85),
   },
+});
+
+// Settings → Live avatar → Avatar server (the owner only: the avatar gets this server's key).
+const isOwnerRequest = (req) => !!process.env.API_KEY && (req.headers['x-api-key'] || req.query.api_key) === process.env.API_KEY;
+
+async function probeAvatarServer({ url, key }) {
+  let error = `Can't reach ${url}`;
+  for (const p of ['/session-status', '/avatars']) {
+    try {
+      const r = await fetch(`${url}${p}`, { headers: key ? { 'x-api-key': key } : {}, signal: AbortSignal.timeout(6000) });
+      if (r.ok) return { reachable: true };
+      if (r.status === 401 || r.status === 403) return { reachable: false, error: 'The avatar server refused the API key.' };
+      error = `${url} answered HTTP ${r.status}`;
+    } catch (e) {
+      error = `Can't reach ${url}: ${e.cause?.code || e.message}`;
+    }
+  }
+  return { reachable: false, error };
+}
+
+const avatarSourceView = () => {
+  const s = avatarSource.get();
+  return {
+    computerName: process.env.JARVIS_SERVER_NAME || os.hostname().replace(/\.local$/, ''),
+    mode: s.mode, url: s.url, hasKey: !!s.key, machine: false, cloudLinked: false,
+    callbackUrl: s.mode === 'own' ? callbackUrl({ target: s.url, port, lan: lanAddress(), tunnelUrl: null, envUrl: process.env.JARVIS_BACKEND_URL }) : null,
+  };
+};
+
+app.get('/api/avatar/source', async (req, res) => {
+  if (!isOwnerRequest(req)) return res.status(403).json({ error: "Only this server's owner can see this" });
+  // Your own server: say whether it answers right now (Settings shows "Connected").
+  const s = avatarSource.get();
+  const probe = s.mode === 'own' ? await probeAvatarServer(s) : {};
+  res.json({ ...avatarSourceView(), ...probe });
+});
+
+app.post('/api/avatar/source', async (req, res) => {
+  if (!isOwnerRequest(req)) return res.status(403).json({ error: "Only this server's owner can change the avatar server" });
+  try {
+    const prev = avatarSource.get();
+    const body = req.body || {};
+    const key = body.key === undefined || (body.key === '' && body.url === prev.url) ? prev.key : body.key;
+    // mode "cloud" (the value the apps send) = this server's default streamer.
+    const next = avatarSource.set({ ...body, key });
+    rendererAvatarsCache = { at: 0, list: null };
+    const probe = next.mode === 'own' ? await probeAvatarServer(next) : { reachable: true };
+    broadcastLog(next.mode === 'own' ? `[LIVE AVATAR] Avatar server: ${next.url}` : '[LIVE AVATAR] Avatar server: default');
+    res.json({ ...avatarSourceView(), ...probe });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.get('/api/server/status', async (req, res) => {

@@ -216,6 +216,8 @@ const setActiveServer = (server: ResolvedServer | null) => {
 
 /** The live avatar a new install starts with. */
 export const DEFAULT_AVATAR = 'maria';
+/** The default live-avatar scene (was plain_white; saves still on it move once — bgDefaultBrightLoft). */
+export const DEFAULT_BACKGROUND = 'bright_loft';
 
 export const useStore = create<AppState>((set, get) => {
   let ws: WebSocket | null = null;
@@ -1056,7 +1058,7 @@ export const useStore = create<AppState>((set, get) => {
     setAvatarGender: (gender) => set({ avatarGender: gender }),
     avatarId: DEFAULT_AVATAR,
     setAvatarId: (id) => set({ avatarId: id }),
-    avatarBackgroundId: 'plain_white',
+    avatarBackgroundId: DEFAULT_BACKGROUND,
     setAvatarBackgroundId: (id) => set({ avatarBackgroundId: id }),
     avatarPrompt: 'You are Jarvis, the central AI orchestrator for this machine, equipped with autonomous sub-agents: Antigravity (AGY), Claude, and Hermes. When asked to perform any computer task, coding, browsing, terminal or file action, ALWAYS delegate to AGY, Claude, or Hermes using your tools.',
     setAvatarPrompt: (prompt) => set({ avatarPrompt: prompt }),
@@ -1089,7 +1091,7 @@ export const useStore = create<AppState>((set, get) => {
             newsRssUrl: parsed.newsRssUrl || '',
             avatarGender: parsed.avatarGender || 'female',
             avatarId: parsed.avatarId || DEFAULT_AVATAR,
-            avatarBackgroundId: parsed.avatarBackgroundId || 'plain_white',
+            avatarBackgroundId: (!parsed.avatarBackgroundId || (parsed.avatarBackgroundId === 'plain_white' && !parsed.bgDefaultBrightLoft)) ? DEFAULT_BACKGROUND : parsed.avatarBackgroundId,
             avatarPrompt: (parsed.avatarPrompt && (parsed.avatarPrompt.includes('delegate') || parsed.avatarPrompt.includes('AGY'))) ? parsed.avatarPrompt : 'You are Jarvis, the central AI orchestrator for this machine, equipped with autonomous sub-agents: Antigravity (AGY), Claude, and Hermes. When asked to perform any computer task, coding, browsing, terminal or file action, ALWAYS delegate to AGY, Claude, or Hermes using your tools.',
             avatarVoice: parsed.avatarVoice || 'Kore'
           });
@@ -1115,6 +1117,7 @@ export const useStore = create<AppState>((set, get) => {
           avatarBackgroundId: next.avatarBackgroundId,
           avatarPrompt: next.avatarPrompt,
           avatarVoice: next.avatarVoice,
+          bgDefaultBrightLoft: true, // saved scenes are the user's choice from now on
         }));
         return next;
       });

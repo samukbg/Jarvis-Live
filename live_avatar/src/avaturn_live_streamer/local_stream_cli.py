@@ -113,7 +113,7 @@ class _OfferBody(BaseModel):
 class _WatchStartBody(BaseModel):
     engine: EngineOptions
     avatar_id: str
-    background_id: str = "plain_white"
+    background_id: str = "bright_loft"
     # The watch screen in pixels: frames are cropped and scaled to it.
     width: int = 240
     height: int = 0
@@ -585,7 +585,7 @@ def _make_app(
                     built_engine=built_engine,
                     peer=peer,
                     avatar=chosen_avatar,
-                    background=body.background_id.strip() or "plain_white",
+                    background=body.background_id.strip() or "bright_loft",
                     idle_timeout=idle_timeout,
                     max_duration=max_duration,
                 )

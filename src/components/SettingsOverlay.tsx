@@ -3,6 +3,8 @@ import { useStore, API_KEY, DEFAULT_AVATAR } from '../store';
 import { Settings as SettingsIcon, Plus, Trash2 } from 'lucide-react';
 import { Pressable, Sheet, alpha, palette } from '../ui';
 import { CreateAvatarModal } from './CreateAvatarModal';
+import { Section } from './SettingsSection';
+import { AvatarServerSection } from './ComputerSettings';
 
 const AVATAR_OPTIONS = [
   'maria', 'ben', 'kate', 'john', 'oliver', 'clara', 'ming', 
@@ -10,16 +12,6 @@ const AVATAR_OPTIONS = [
   'gordon', 'marcus', 'mozart', 'trevor'
 ];
 
-/** A settings group (module level: defined inside the component, its inputs would remount on every keystroke). */
-const Section = ({ title, children, aside }: { title: string; children: React.ReactNode; aside?: React.ReactNode }) => (
-  <section className="surface flex flex-col gap-3 p-4">
-    <div className="flex items-center justify-between gap-2">
-      <h3 className="t-eyebrow" style={{ color: palette.textTertiary }}>{title}</h3>
-      {aside}
-    </div>
-    {children}
-  </section>
-);
 
 export const SettingsOverlay: React.FC = () => {
   const { 
@@ -195,6 +187,8 @@ export const SettingsOverlay: React.FC = () => {
             <p className="t-footnote" style={{ color: palette.textTertiary }}>Voice and the avatar both connect to this server.</p>
             {serverError && <p className="t-footnote" style={{ color: palette.warning }}>{serverError}</p>}
           </Section>
+
+          <AvatarServerSection open={settingsOpen} />
 
           <Section title="Integrations">
             <label className="flex flex-col gap-1.5">

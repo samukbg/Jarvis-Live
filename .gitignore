@@ -41,3 +41,4 @@ live_avatar/reference_voices/*.mp3
 .idea/
 .vscode/
 *.swp
+avatar-source.json

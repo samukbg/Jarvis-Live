@@ -444,7 +444,7 @@ export const TalkingAvatar: React.FC<TalkingAvatarProps> = ({ onClick }) => {
         sdp: finalLocalDesc.sdp,
         type: finalLocalDesc.type,
         avatar_id: avatarId || DEFAULT_AVATAR,
-        background_id: avatarBackgroundId || 'plain_white',
+        background_id: avatarBackgroundId || 'bright_loft',
       };
 
       let response = await fetch(`${workingBase}${offerPath}`, {
