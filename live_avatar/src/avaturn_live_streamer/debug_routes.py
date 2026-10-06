@@ -7,7 +7,7 @@
 ``POST /debug/latency/reset``  clear streamer, renderer and client numbers
 ``POST /client-stats``         5 s WebRTC ``getStats`` summaries from the mobile avatar WebView
 ``GET  /debug/input``          what was sent to Gemini in the last minute, and what it heard
-``GET  /debug/input.wav``      that audio (16 kHz mono)
+``GET  /debug/input.wav``      that audio (16 kHz mono) — both 404 unless AVATAR_DEBUG_INPUT_TAP=1
 
 Each is also mounted under ``/api/avatar/...`` to match the backend proxy paths.
 """
@@ -18,7 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 
 from avaturn_live_streamer import constant
@@ -109,11 +109,15 @@ def register_debug_routes(app: FastAPI, renderer_url: Callable[[], str | None]) 
     @app.get("/debug/input")
     @app.get("/api/avatar/debug/input")
     async def debug_input() -> dict[str, Any]:
+        if not INPUT_TAP.enabled:
+            raise HTTPException(404, "The input tap is off (set AVATAR_DEBUG_INPUT_TAP=1 to debug).")
         return INPUT_TAP.info()
 
     @app.get("/debug/input.wav")
     @app.get("/api/avatar/debug/input.wav")
     async def debug_input_wav() -> Response:
+        if not INPUT_TAP.enabled:
+            raise HTTPException(404, "The input tap is off (set AVATAR_DEBUG_INPUT_TAP=1 to debug).")
         return Response(INPUT_TAP.wav(), media_type="audio/wav")
 
     @app.post("/client-stats")

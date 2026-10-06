@@ -3,9 +3,13 @@
 When Gemini mishears (French taken for Chinese), this tells whether the audio itself was
 damaged before it left the server. Memory only, overwritten continuously; read with
 GET /debug/input.wav (the audio) and GET /debug/input (segments + transcripts).
+
+Off unless AVATAR_DEBUG_INPUT_TAP=1: it holds what users said, which Jarvis Cloud servers
+must not keep. Turn it on only on your own server while debugging.
 """
 
 import io
+import os
 import threading
 import time
 import wave
@@ -16,13 +20,16 @@ _MAX_BYTES = _RATE * 2 * 60  # 60 s of s16 mono
 
 
 class InputTap:
-    def __init__(self) -> None:
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
         self._lock = threading.Lock()
         self._chunks: deque[tuple[float, str, bytes]] = deque()
         self._size = 0
         self._heard: deque[tuple[float, str, str]] = deque(maxlen=50)
 
     def add(self, stream_id: str, pcm16k: bytes) -> None:
+        if not self.enabled:
+            return
         with self._lock:
             self._chunks.append((time.time(), stream_id, pcm16k))
             self._size += len(pcm16k)
@@ -30,6 +37,8 @@ class InputTap:
                 self._size -= len(self._chunks.popleft()[2])
 
     def heard(self, stream_id: str, text: str) -> None:
+        if not self.enabled:
+            return
         with self._lock:
             self._heard.append((time.time(), stream_id, text))
 
@@ -62,4 +71,4 @@ class InputTap:
         }
 
 
-INPUT_TAP = InputTap()
+INPUT_TAP = InputTap(os.environ.get("AVATAR_DEBUG_INPUT_TAP") == "1")
