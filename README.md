@@ -305,6 +305,16 @@ The live-avatar engine in [`live_avatar/`](live_avatar) is a modified copy of [A
 
 [AVTR-1](https://github.com/avaturn-live/avtr-1) · [Gemini Live API](https://ai.google.dev/gemini-api/docs/live) · [RealtimeSTT](https://github.com/KoljaB/RealtimeSTT) · [Coqui XTTS](https://github.com/idiap/coqui-ai-TTS) · [Ollama](https://ollama.com) · [three.js](https://threejs.org) · [TalkingHead](https://github.com/met4citizen/TalkingHead)
 
+## ⭐ Star history
+
+<a href="https://star-history.com/#samukbg/Jarvis-Live&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=samukbg/jarvis-live&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=samukbg/jarvis-live&type=Date" />
+    <img alt="Jarvis Live GitHub stars over time (star history chart)" src="https://api.star-history.com/svg?repos=samukbg/jarvis-live&type=Date" width="100%" />
+  </picture>
+</a>
+
 <div align="center">
 
 **If Jarvis Live made you smile, give it a ⭐: it helps other builders find it.**
