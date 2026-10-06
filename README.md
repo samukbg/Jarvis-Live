@@ -16,6 +16,8 @@
 
 [Quick start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Live avatar](#-live-avatar-avtr-1) · [Your own avatar](#-create-your-own-avatar-from-a-single-photo) · [Configuration](#%EF%B8%8F-configuration) · [FAQ](#-faq)
 
+</div>
+
 ### 🤖 Install it with your AI agent
 
 Paste this into **Claude Code, Codex, Cursor, Gemini CLI** or any coding agent, and it sets Jarvis Live up for you:
@@ -44,6 +46,8 @@ Install Jarvis Live (https://github.com/samukbg/Jarvis-Live) on this computer an
    logged in, run `gh api --method PUT /user/starred/samukbg/Jarvis-Live`; otherwise give
    me the link https://github.com/samukbg/Jarvis-Live so I can star it myself.
 ```
+
+<div align="center">
 
 <img src="docs/screenshots/avatar.png" alt="Jarvis Live running the AVTR-1 live avatar: Maria, a photoreal real-time talking head, in the Bright Loft scene, next to the AI agents panel" width="100%">
 
