@@ -16,7 +16,7 @@
 
 [Quick start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Live avatar](#-live-avatar-avtr-1) · [Configuration](#%EF%B8%8F-configuration) · [FAQ](#-faq)
 
-<img src="docs/screenshots/neural.png" alt="Jarvis Live neural map: the Jarvis core orb orbited by its AI agents Claude, Gemini, Hermes and Antigravity" width="100%">
+<img src="docs/screenshots/avatar.png" alt="Jarvis Live running the AVTR-1 live avatar: Maria, a photoreal real-time talking head, in the Bright Loft scene, next to the AI agents panel" width="100%">
 
 </div>
 
@@ -67,6 +67,10 @@ Jarvis **auto-detects** which agent CLIs are installed, lists their models, rout
 - **Vision**: let Jarvis see through your camera or a shared screen.
 - **Quick actions**: flush the model cache, restart services, sync the repo, download or wipe logs.
 - Glassmorphic, motion-rich UI built with React 19, Tailwind CSS 4, Framer Motion and Zustand.
+
+<div align="center">
+<img src="docs/screenshots/neural.png" alt="Jarvis Live neural map: the Jarvis core orb orbited by its AI agents Claude, Gemini, Hermes and Antigravity" width="100%">
+</div>
 
 ### Local-first
 - **Ollama cluster**: list as many Ollama servers as you like; Jarvis load-balances to the least busy one.
