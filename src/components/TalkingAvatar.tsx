@@ -799,7 +799,7 @@ export const TalkingAvatar: React.FC<TalkingAvatarProps> = ({ onClick }) => {
         <div className="relative w-full flex-1 min-h-0 rounded-[20px] overflow-hidden border border-stroke bg-black/60 flex items-center justify-center">
           
 
-          {/* Live Video Element (Streaming from RTX 3090 TensorRT neural engine!) */}
+          {/* Live Video Element (streamed from the AVTR-1 TensorRT renderer) */}
           <video
             ref={videoRef}
             autoPlay

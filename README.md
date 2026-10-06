@@ -14,7 +14,7 @@
 
 **Talk to your computer the way Tony Stark does.** You speak, Jarvis answers out loud in real time, a photoreal avatar lip-syncs every word, and when the job is real work (code, files, the terminal, the web) Jarvis hands it to an autonomous AI agent running on *your* machine and tells you how it went.
 
-[Quick start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Live avatar](#-live-avatar-avtr-1) · [Configuration](#%EF%B8%8F-configuration) · [FAQ](#-faq)
+[Quick start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Live avatar](#-live-avatar-avtr-1) · [Your own avatar](#-create-your-own-avatar-from-a-single-photo) · [Configuration](#%EF%B8%8F-configuration) · [FAQ](#-faq)
 
 <img src="docs/screenshots/avatar.png" alt="Jarvis Live running the AVTR-1 live avatar: Maria, a photoreal real-time talking head, in the Bright Loft scene, next to the AI agents panel" width="100%">
 
@@ -58,7 +58,7 @@ Jarvis **auto-detects** which agent CLIs are installed, lists their models, rout
 ### Live avatar
 - Photoreal talking head powered by **[AVTR-1](https://github.com/avaturn-live/avtr-1)**: lip-sync *and* active listening, 25 fps, TensorRT-accelerated.
 - **18 built-in avatars** (Maria, Elena, Marcus, Kate…) fetched from Hugging Face.
-- **Create your own avatar from a single photo**, optionally with a cloned voice (XTTS).
+- **[Create your own avatar from a single photo](#-create-your-own-avatar-from-a-single-photo)**, optionally with a cloned voice (XTTS).
 - Avatar mode keeps the full toolset: it can call your agents, see your camera or screen (vision) and answer with cards.
 
 ### Command center (web client)
@@ -200,6 +200,25 @@ pixi run build-trt-engines   # compile TensorRT engines for your GPU
 Then `./boot.sh` starts the streamer as well. On Windows, `live_avatar/setup_avatar_windows.bat` sets up the streamer natively and the renderer inside WSL2. Full details, benchmarks and TURN setup for remote access are in [`live_avatar/README.md`](live_avatar/README.md).
 
 Switch **Orb → Avatar** in the UI, pick an avatar in Settings, or click **New avatar** to create one from a photo.
+
+## 🎭 Create your own avatar from a single photo
+
+Turn **one portrait photo** into a real-time talking avatar, and optionally give it **a cloned voice from a few seconds of audio**. No 3D modeling, no video shoot, no training run you have to manage: Jarvis prepares the portrait for the AVTR-1 renderer on your GPU and the new avatar shows up next to the built-in ones.
+
+<div align="center">
+<img src="docs/screenshots/create-avatar.png" alt="Jarvis Live: create a new live avatar from a single portrait photo, choose a Gemini Live voice, and optionally clone a voice from a short audio sample" width="70%">
+</div>
+
+1. Open **Settings** and click **New avatar** next to *Live avatar*.
+2. **Name** your avatar, pick a gender and a **base Gemini Live voice** (Kore, Aoede, Puck, Charon, Fenrir).
+3. Add a **portrait photo** (PNG, JPEG or WebP): head and shoulders, facing the camera, neutral expression, even lighting, no sunglasses. The 16:9 stream preview shows how it will be framed.
+4. *Optional:* add a **voice sample**: upload or record **5–30 seconds** of clean speech. Jarvis clones it with **XTTS-v2** so your avatar speaks with that voice; without a sample it uses the base Gemini voice.
+5. Click **Create Live Avatar**. Progress shows in the app; when it's ready, the avatar is selectable everywhere, and you can delete it from the same list.
+
+**Good to know**
+- Portraits and voice samples **stay on your machine**: they're stored next to the renderer (`live_avatar/`), never uploaded to a third party.
+- Voice cloning needs the XTTS voice server (`live_avatar/voice_server/`, port 8010). On a single GPU it competes with the 25 fps renderer, so a second GPU or machine (`XTTS_URL`) gives the smoothest result.
+- **Use photos and voices you have the right to use.** Only create avatars of yourself or of people who gave you their consent.
 
 ## ⚙️ Configuration
 

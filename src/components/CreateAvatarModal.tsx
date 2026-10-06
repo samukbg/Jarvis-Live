@@ -103,7 +103,7 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
     if (!createdAvatarId) return;
     if (currentJobStatus === 'ready' && handledReadyRef.current !== createdAvatarId) {
       handledReadyRef.current = createdAvatarId;
-      setSubmitStep('Neural voice clone & avatar active in RTX 3090 VRAM!');
+      setSubmitStep('Neural voice clone & avatar active in GPU memory!');
       setAvatarId(createdAvatarId);
       setAvatarVoice(voice);
       setAvatarGender(gender);
@@ -238,7 +238,7 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
 
     setIsSubmitting(true);
     setErrorMsg(null);
-    setSubmitStep('Initiating avatar generation on RTX 3090 GPU...');
+    setSubmitStep('Initiating avatar generation on the GPU...');
 
     const base = activeServerUrl || BACKEND_HTTP;
 
@@ -271,7 +271,7 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
 
       addNotification({
         label: 'AVATAR TRAINING',
-        msg: `Generating avatar "${name}" in background on RTX 3090 GPU...`,
+        msg: `Generating avatar "${name}" in background on the GPU...`,
         kind: 'info'
       });
 
@@ -511,7 +511,7 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
           {/* ── 2. Voice Cloning Audio Sample Section ────────────────────── */}
           <div>
             <label className="block text-xs font-bold tracking-wide text-accent-cyan mb-2">
-              2. Voice Cloning Sample (Audio)
+              3. Voice Cloning Sample (Audio)
             </label>
 
             <div className="p-4 bg-white/[0.03] border border-white/10 rounded-xl space-y-3">
@@ -595,7 +595,7 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
                   ? 'GENERATION COMPLETE' 
                   : currentJob?.status === 'failed' 
                     ? 'GENERATION FAILED' 
-                    : 'TRAINING AVATAR ON RTX 3090 GPU'}
+                    : 'TRAINING AVATAR ON THE GPU'}
               </span>
               <span className="font-bold text-white">{currentProgress}%</span>
             </div>

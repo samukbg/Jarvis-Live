@@ -81,7 +81,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Live Avatar Integration & Proxy (AVTR-1 RTX 3090) ─────────────────────────
+// ── Live Avatar Integration & Proxy (AVTR-1) ─────────────────────────
 let audioSeqOut = 0;
 function broadcastAudioChunk(pcmBuffer) {
   if (!pcmBuffer || pcmBuffer.length === 0) return;
@@ -509,7 +509,7 @@ app.post(['/api/avatar/upload', '/api/avatar/upload/', '/upload-avatar'], async 
         }
 
         job.progress = 35;
-        job.step = 'Analyzing facial landmarks on RTX 3090 GPU...';
+        job.step = 'Analyzing facial landmarks on the GPU...';
         broadcastAvatarTraining('avatar_training_progress', { job });
 
         job.progress = 60;
@@ -542,7 +542,7 @@ app.post(['/api/avatar/upload', '/api/avatar/upload/', '/upload-avatar'], async 
         }
 
         job.progress = 85;
-        job.step = 'Pinning neural voice latents & avatar into RTX 3090 VRAM...';
+        job.step = 'Pinning neural voice latents & avatar into GPU memory...';
         broadcastAvatarTraining('avatar_training_progress', { job });
 
         await new Promise(r => setTimeout(r, 600));
