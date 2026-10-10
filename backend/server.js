@@ -941,9 +941,13 @@ let activeLanguage = 'en';
 let selectedModels = { hermes: 'nvidia/nemotron-3-super-120b-a12b:free', gemini: 'gemini-3.8-flash', claude: 'claude-3-haiku-20240307' };
 
 /** `agy` arguments for the selected Gemini model, valid for this agy's model list (agents/agyModel.js). */
-async function agyArgs() {
+// Voice delegations: someone is waiting on the answer → the chosen model at low effort
+// (JARVIS_VOICE_AGENT_EFFORT=selected keeps the chosen effort).
+const VOICE_AGENT_EFFORT = process.env.JARVIS_VOICE_AGENT_EFFORT || 'low';
+async function agyArgs({ voice = false } = {}) {
   const models = (await detectAgents().catch(() => ({ agents: [] }))).agents.find((a) => a.id === 'gemini')?.models || [];
-  return agyModelArgs(selectedModels.gemini, models);
+  const effort = voice && VOICE_AGENT_EFFORT !== 'selected' ? VOICE_AGENT_EFFORT : undefined;
+  return agyModelArgs(selectedModels.gemini, models, { effort });
 }
 let lastUserVoiceCommand = '';
 let micActive = true;
@@ -1523,9 +1527,15 @@ async function callOllamaChatResilient(messages, model = 'qwen3.5-0.8b', onStrea
 }
 
 // Shared structured prompt for Gemini and Claude CLI invocations.
-function buildTaskQuery(command) {
+function buildTaskQuery(command, { voice = false } = {}) {
   const task = cleanAgentTask(command);
+  const now = new Date().toLocaleString('en-GB', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+  // The agent otherwise runs `date` first, and opens page after page: ~3-5 s per model turn.
+  const speed = voice
+    ? `\nA voice assistant is waiting to read your answer out loud, so speed matters: do only the steps the task needs. For a question, one or two web searches are usually enough — answer from what they return instead of opening pages one by one. Don't check the date or explore the system unless the task is about it.`
+    : '';
   return `## Context
+Now: ${now}.${speed}
 You are running on the user's macOS machine. You have FULL ACCESS to the system via your terminal tool. Use commands like \`osascript\` (AppleScript) or \`open\` to control apps (like Spotify), change settings, open URLs, etc. NEVER say you lack access.
 If asked to play specific music/artists on Spotify, ALWAYS first use your web search tool to find their exact Spotify URI (e.g. spotify:artist:... or spotify:track:...), then use AppleScript to play that specific URI via osascript.
 CRITICAL MEDIA RULE: If asked to find, show, or load a media file (Video, Audio, PDF) or a 3D Object (.obj, .glb, .gltf) from the internet, DO NOT open the file in a browser and take a screenshot! You MUST securely download the actual file to the local filesystem and output a markdown link pointing to its absolute path (e.g. \`[Model](file:///absolute/path/to/model.obj)\` or \`[Video](file:///absolute/path/to/video.mp4)\`). The Jarvis overlay will natively intercept this link and render it interactively.
@@ -1547,7 +1557,7 @@ const workerContext = {
   broadcastAgentStatus,
   broadcastAlert,
   getSelectedModel: (agent) => selectedModels[agent],
-  agyModelArgs: () => agyArgs(),
+  agyModelArgs: (opts) => agyArgs(opts),
   buildTaskQuery,
   registerProcess: (proc) => activeProcesses.add(proc),
   unregisterProcess: (proc) => activeProcesses.delete(proc),

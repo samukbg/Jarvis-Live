@@ -91,7 +91,7 @@ _GRACEFUL_CLOSE_CODE = 1000
 
 # Delegation tool → the agent id the backend detects (GET /api/agents) and when to use it.
 _DELEGATION_AGENTS = {
-    "delegate_to_agy": ("gemini", "Antigravity (AGY)", "For computer-use, browser navigation, Antigravity coding tasks, file editing, web search, creating apps, and PC automation."),
+    "delegate_to_agy": ("gemini", "Antigravity (AGY)", "For computer-use, browser navigation, Antigravity coding tasks, file editing, downloads, creating apps, long multi-page research, and PC automation."),
     "delegate_to_claude": ("claude", "Claude", "For deep reasoning, architectural design, complex refactoring, and code review."),
     "delegate_to_hermes": ("hermes", "Hermes", "For quick terminal commands, shell scripts, CLI tools, and system administration."),
     "delegate_to_codex": ("codex", "Codex", "For coding tasks, writing and fixing code, and running repository changes with the OpenAI Codex CLI."),
@@ -111,14 +111,17 @@ BASE_DELEGATION_RULES = (
     "[CRITICAL CAPABILITY & TOOL USAGE RULES]\n"
     "You have real, direct access to execute tasks on this computer through your tools. "
     "When the user asks you to perform ANY computer task, coding task, browser action, script, app development, "
-    "web search, file operation, command execution, or system analysis, NEVER say you cannot do it or that you lack tools.\n"
+    "file operation, command execution, or system analysis, NEVER say you cannot do it or that you lack tools.\n"
     "Instead, you MUST CALL the appropriate tool immediately:\n"
     "{TOOLS}\n"
-    "MANDATORY PROTOCOL: Before calling any delegation tool, you MUST FIRST speak a short, natural acknowledgment "
-    "to the user in the EXACT SAME LANGUAGE they used (e.g., if English: 'Let me check that for you.' or 'I\'m on it, executing that now.'; "
-    "if Portuguese: 'Vou verificar isso agora.' or 'Estou nisso.'; if Spanish: 'Lo reviso de inmediato.'). "
-    "Never respond in English if the user spoke another language. Do not skip this verbal acknowledgment.\n\n"
-    "Once the tool execution returns the outcome result, summarize the findings naturally and concisely to the user in their language."
+    "Delegation tools run in the background: you keep talking while the agent works. ALWAYS SPEAK FIRST: as you call one, "
+    "tell the user in one short sentence, in the EXACT SAME LANGUAGE they used, that you are on it (e.g. English: "
+    "'I\'m on it, I\'m asking Antigravity.'; Portuguese: 'Estou nisso, vou pedir ao Antigravity.'; French: "
+    "'Je m\'en occupe, je demande à Antigravity.'). Never stay silent, and never say the task is done before its result comes back.\n"
+    "When the result comes back, summarize it naturally and concisely to the user in their language.\n\n"
+    "[WEB QUESTIONS]\n"
+    "Questions a web search can answer (weather, news, events, opening hours, prices, sports, facts, places): use Google Search "
+    "and answer yourself, right away. Do not delegate them."
 )
 
 # Gemini Live drops sessions now and then (1011 "Internal error occurred", network 1006,
@@ -335,7 +338,10 @@ class GeminiApiClient:
             tool, prompt = phone
             declarations = [*declarations, tool]
             full_system_instruction = f"{full_system_instruction}\n\n{prompt}"
-        tools = [{"functionDeclarations": declarations}] if declarations else []
+        # Delegations are non-blocking (Gemini says "I'm on it" while the agent works); web
+        # questions go to Google Search (~2 s) instead of an agent (tens of seconds).
+        declarations = [{**d, "behavior": "NON_BLOCKING"} if d["name"] in _DELEGATION_AGENTS else d for d in declarations]
+        tools = [{"googleSearch": {}}, *([{"functionDeclarations": declarations}] if declarations else [])]
 
         chosen_voice = self._config.voice or self._voice_converter.profile.gemini_base_voice or "Kore"
 
@@ -383,6 +389,7 @@ class GeminiApiClient:
                 }
             }
             await ws.send(json.dumps(setup_msg))
+            self._ws = ws  # the current session: delegation results go here, even after a reconnect
             yield ws
 
     def _convert_timed(self, raw: SpeechBuffer) -> SpeechBuffer:
@@ -612,6 +619,7 @@ class GeminiApiClient:
             
             async def _run_delegation(fc_list: list[dict[str, Any]]) -> None:
                 function_responses = []
+                finished = []
                 for fc in fc_list:
                     name = fc.get("name", "")
                     args = fc.get("args", {})
@@ -626,19 +634,27 @@ class GeminiApiClient:
                     
                     _LOGGER.info("Gemini Live Tool Call detected -> Executing Agent Task", agent=agent, task=task)
                     result_text = await self._execute_delegation(agent, task)
+                    finished.append((task, result_text))
                     function_responses.append({
                         "id": call_id,
                         "name": name,
-                        "response": {"result": result_text}
+                        # Non-blocking call: Gemini tells the user once it is quiet.
+                        "scheduling": "WHEN_IDLE",
+                        "response": {"result": f"Task finished. Agent answer:\n{result_text}"},
                     })
-                
-                tool_response_msg = {
-                    "toolResponse": {
-                        "functionResponses": function_responses
-                    }
-                }
-                if ws.state == State.OPEN:
-                    await ws.send(json.dumps(tool_response_msg))
+
+                current = getattr(self, "_ws", None)
+                if current is ws and ws.state == State.OPEN:
+                    await ws.send(json.dumps({"toolResponse": {"functionResponses": function_responses}}))
+                elif current is not None and current.state == State.OPEN and finished:
+                    # The session was replaced meanwhile (1011, reconnect): the old call ids mean
+                    # nothing to it — hand the answers over as a text turn instead of losing them.
+                    _LOGGER.info("Gemini session changed during a delegation — sending the result as text")
+                    text = "\n\n".join(
+                        f'(The task you handed to the agent earlier — "{t}" — is finished. Tell me what it says.)\nTask finished. Agent answer:\n{r}'
+                        for t, r in finished
+                    )
+                    await current.send(json.dumps({"clientContent": {"turns": [{"role": "user", "parts": [{"text": text}]}], "turnComplete": True}}))
 
             asyncio.create_task(_run_delegation(function_calls))
             return

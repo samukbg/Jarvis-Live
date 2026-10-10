@@ -1,6 +1,9 @@
 import { spawn } from 'child_process';
 import { getCrossPlatformEnv, getCrossPlatformCommand, getSpawnOptions, escapeArg } from '../../shared/osUtils.js';
 
+// Voice delegations stop after this long (agy --print-timeout) and say so.
+const VOICE_TIMEOUT_S = Number(process.env.JARVIS_VOICE_AGENT_TIMEOUT_S) || 240;
+
 export class AgyWorker {
   constructor(context) {
     this.id = 'agy';
@@ -42,18 +45,23 @@ export class AgyWorker {
     yield { type: 'PartialResult', payload: { result } };
   }
 
-  async handleCommand(command, source = 'text') {
-    const modelArgs = await this.ctx.agyModelArgs();
+  async handleCommand(command, source = 'text', { isLiveDelegation = false } = {}) {
+    // Spoken requests (phone, watch, avatar): low effort and a "be quick" brief.
+    const voice = isLiveDelegation || source === 'voice';
+    const modelArgs = await this.ctx.agyModelArgs({ voice });
+    // …and a time limit: a runaway task (dozens of downloads) shouldn't run on for minutes
+    // after the conversation has moved on.
+    const limitArgs = voice ? ['--print-timeout', `${VOICE_TIMEOUT_S}s`] : [];
     return new Promise((resolve) => {
       this.ctx.broadcastLog(`>>> [GEMINI] ${command}`);
       this.ctx.broadcastAgentStatus('agy', 'THINKING');
       this.ctx.broadcast({ type: 'core_output_token', agentId: 'jarvis', token: '' });
 
-      const proc = spawn(getCrossPlatformCommand('agy'), ['--dangerously-skip-permissions', ...modelArgs], getSpawnOptions());
+      const proc = spawn(getCrossPlatformCommand('agy'), ['--dangerously-skip-permissions', ...modelArgs, ...limitArgs], getSpawnOptions());
       
       this.ctx.registerProcess(proc);
       proc.stdin?.on('error', () => {});
-      proc.stdin?.write(this.ctx.buildTaskQuery(command) + '\n');
+      proc.stdin?.write(this.ctx.buildTaskQuery(command, { voice }) + '\n');
       proc.stdin?.end();
 
       let output = '';
@@ -80,8 +88,14 @@ export class AgyWorker {
           return;
         }
         this.ctx.broadcastLog(`[GEMINI] Done (exit ${code})`);
-        
+
         let result = output;
+        if (voice && !output.trim()) {
+          // --print-timeout ends with exit 0 and no answer.
+          result = `The agent did not finish within ${Math.round(VOICE_TIMEOUT_S / 60)} minutes and was stopped. Suggest a smaller task.`;
+          this.ctx.broadcastAgentStatus('agy', 'IDLE');
+          return resolve(result);
+        }
         if (output) {
           this.ctx.broadcast({
             type: 'agent_result',

@@ -20,3 +20,11 @@ test('nothing usable selected: the first model agy lists, else agy’s own defau
   assert.deepEqual(agyModelArgs('claude-3-haiku', models), ['--model', 'gemini-3.8-flash-high']);
   assert.deepEqual(agyModelArgs(undefined, []), []);
 });
+
+test('voice delegations: the same model at the effort asked for, when agy offers it', () => {
+  assert.deepEqual(agyModelArgs('gemini-3.8-flash-high', models, { effort: 'low' }), ['--model', 'gemini-3.8-flash-low']);
+  assert.deepEqual(agyModelArgs('gemini-3.1-pro-high', models, { effort: 'low' }), ['--model', 'gemini-3.1-pro-low']);
+  assert.deepEqual(agyModelArgs('gemini-3.1-pro-high', models, { effort: 'medium' }), ['--model', 'gemini-3.1-pro-high'], 'pro has no medium');
+  assert.deepEqual(agyModelArgs('gemini-3.8-flash', [], { effort: 'low' }), ['--model', 'gemini-3.8-flash', '--effort', 'low']);
+  assert.deepEqual(agyModelArgs('', models, { effort: 'low' }), ['--model', 'gemini-3.8-flash-low']);
+});

@@ -3,6 +3,43 @@ import { PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from '../../device/phoneAction
 import { TranscriptBuffer } from '../transcript.js';
 import { acknowledgement } from '../acknowledge.js';
 
+const AGENT_LABELS = { agy: 'Antigravity', gemini: 'Antigravity', claude: 'Claude', hermes: 'Hermes', codex: 'Codex' };
+// How long Gemini gets to speak its own acknowledgement before Jarvis writes one.
+export const ACK_GRACE_MS = 2500;
+
+/** The Live session's rules: search answers itself, computer tasks go to the agent — said out loud first. */
+export function liveInstruction(agent) {
+  const tool = `delegate_to_${agent}`;
+  const name = AGENT_LABELS[agent] || agent.toUpperCase();
+  return `You are Jarvis, a concise and helpful AI assistant. Respond naturally and briefly, in the language the user speaks.
+
+Questions a web search can answer (weather, news, events, opening hours, prices, sports, facts, places): use Google Search and answer yourself, right away. Do not delegate them.
+
+Tasks that need the user's computer (open or control apps such as Spotify, files, folders, scripts, downloads, coding, creating apps, browsing websites, long multi-step research): never say you cannot do it — call the \`${tool}\` tool. It runs in the background on the user's computer with the ${name} agent.
+ALWAYS speak first: as you call it, tell the user in one short sentence, in their language, that you are on it (e.g. "I'm on it, I'm asking ${name}." / "Je m'en occupe, je demande à ${name}." / "Estou nisso, vou pedir ao ${name}."). Never stay silent and never say the task is done before its result comes back. When the result comes back, tell the user what it says, briefly and naturally.
+
+${PHONE_ACTION_PROMPT}`;
+}
+
+/** Google Search (answers in ~2 s) plus the agent (non-blocking: Gemini keeps talking while it works). */
+export function liveTools(agent) {
+  return [
+    { googleSearch: {} },
+    {
+      functionDeclarations: [{
+        name: `delegate_to_${agent}`,
+        description: `Runs a task on the user's computer with the ${AGENT_LABELS[agent] || agent.toUpperCase()} agent, in the background: apps, files, scripts, browsing, coding. Say a short acknowledgement as you call it; the result arrives later.`,
+        behavior: 'NON_BLOCKING',
+        parameters: {
+          type: 'OBJECT',
+          properties: { task: { type: 'STRING', description: 'The detailed task instruction to send to the agent' } },
+          required: ['task'],
+        },
+      }, PHONE_ACTION_TOOL],
+    },
+  ];
+}
+
 export class GeminiLiveProvider {
   constructor(options) {
     this.createClient = options.createClient;
@@ -78,25 +115,10 @@ export class GeminiLiveProvider {
               }
             }
           },
-          systemInstruction: `You are Jarvis, a concise and helpful AI assistant. Respond naturally and briefly. When the user asks you to perform a computer-use task, browser-use task, run a script, create an app, search something complex, or modify files, DO NOT say you cannot do it. Instead, USE the \`delegate_to_${this.targetAgent}\` tool to delegate the task to the ${this.targetAgent.toUpperCase()} agent.\n\nCRITICAL RULE: Before invoking the \`delegate_to_${this.targetAgent}\` tool, you MUST first speak a short acknowledgment to the user IN THE EXACT SAME LANGUAGE they used (e.g., if English: "Let me check that for you." or "I'm on it.", if Portuguese: "Vou verificar" or "Estou nisso", etc). Do not skip this acknowledgment and NEVER respond in English if the user spoke another language.\n\nOnce the tool returns a result, summarize the findings naturally to the user in their language.\n\n${PHONE_ACTION_PROMPT}`,
+          systemInstruction: liveInstruction(this.targetAgent),
           outputAudioTranscription: {},
           inputAudioTranscription: {},
-          tools: [{
-            functionDeclarations: [{
-              name: `delegate_to_${this.targetAgent}`,
-              description: `Delegate computer-use, browser-use, scripting, or analysis tasks to the ${this.targetAgent.toUpperCase()} agent.`,
-              parameters: {
-                type: 'OBJECT',
-                properties: {
-                  task: {
-                    type: 'STRING',
-                    description: 'The detailed task instruction to send to the terminal agent'
-                  }
-                },
-                required: ['task']
-              }
-            }, PHONE_ACTION_TOOL]
-          }],
+          tools: liveTools(this.targetAgent),
         },
         callbacks: {
           onopen: () => {
@@ -170,51 +192,19 @@ export class GeminiLiveProvider {
                 })();
               } else if (fc && fc.name === `delegate_to_${this.targetAgent}`) {
                 const task = fc.args.task;
-                this.acknowledgeIfSilent(this.targetAgent);
+                // Non-blocking: Gemini goes on talking ("I'm on it…") while the agent works. The
+                // written acknowledgement is only a fallback, when it stays silent.
+                setTimeout(() => this.acknowledgeIfSilent(this.targetAgent), ACK_GRACE_MS);
                 this.broadcastLog(`[GEMINI LIVE] Delegating to ${this.targetAgent.toUpperCase()}: ${task}`);
-                
-                // Execute without blocking the event loop or audio stream
+                const session = this.session;
                 (async () => {
-                  const rawResultText = await this.delegateToAgent(task, this.targetAgent, true);
-                  const resultText = (rawResultText && rawResultText.length > 5000) 
-                    ? rawResultText.substring(0, 5000) + '... [TRUNCATED DUE TO LENGTH]' 
-                    : rawResultText;
-                  
-                  try {
-                    console.log(`[GEMINI LIVE] Sending tool response for ${fc.name}... length: ${resultText?.length || 0}`);
-                    if (this.session?.sendToolResponse) {
-                      this.session.sendToolResponse({
-                        functionResponses: [{
-                          id: fc.id,
-                          name: fc.name,
-                          response: { result: resultText }
-                        }]
-                      });
-                    } else if (this.session) {
-                      this.session.send({
-                        clientContent: {
-                          turnComplete: true,
-                          toolResponse: {
-                            functionResponses: [{
-                              id: fc.id,
-                              name: fc.name,
-                              response: { result: resultText }
-                            }]
-                          }
-                        }
-                      });
-                    }
-                    console.log(`[GEMINI LIVE] Tool response sent successfully.`);
-                  } catch (e) {
-                    console.error(`[GEMINI LIVE] Failed to send tool response:`, e);
-                    this.broadcastLog(`[GEMINI ERROR] Tool Response Failed: ${e.message}`);
-                  }
+                  const raw = await this.delegateToAgent(task, this.targetAgent, true);
+                  const resultText = raw && raw.length > 5000 ? `${raw.substring(0, 5000)}... [TRUNCATED DUE TO LENGTH]` : raw;
+                  this.deliverResult(session, fc, task, resultText);
                 })();
               }
             }
 
-
-            
             if (sc?.turnComplete) {
               this.flushUserSpeech();
               const said = this.jarvisSpeech.flush();
@@ -246,6 +236,34 @@ export class GeminiLiveProvider {
       if (this.broadcastAgentStatus) this.broadcastAgentStatus(this.targetAgent || 'gemini', 'IDLE');
     } finally {
       this.connecting = false;
+    }
+  }
+
+  /**
+   * Hands an agent's answer back to Gemini, which tells the user once it is quiet. When the
+   * session was replaced meanwhile (1011 drops, reconnects), the old call id means nothing to
+   * the new one: the answer goes in as a text turn instead of being lost.
+   */
+  deliverResult(session, fc, task, resultText) {
+    const result = `Task finished. Agent answer:\n${resultText || 'Done.'}`;
+    try {
+      if (session && session === this.session) {
+        console.log(`[GEMINI LIVE] Sending tool response for ${fc.name}... length: ${resultText?.length || 0}`);
+        session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, scheduling: 'WHEN_IDLE', response: { result } }] });
+      } else if (this.session?.sendClientContent) {
+        console.log(`[GEMINI LIVE] Session changed during ${fc.name}: sending the answer as a text turn`);
+        this.session.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text: `(The task you handed to the agent earlier — "${task}" — is finished. Tell me what it says.)\n${result}` }] }],
+          turnComplete: true,
+        });
+      } else {
+        console.log(`[GEMINI LIVE] No Live session for the ${fc.name} answer (shown on screen only)`);
+        return;
+      }
+      console.log('[GEMINI LIVE] Tool response sent successfully.');
+    } catch (e) {
+      console.error('[GEMINI LIVE] Failed to send tool response:', e);
+      this.broadcastLog(`[GEMINI ERROR] Tool Response Failed: ${e.message}`);
     }
   }
 

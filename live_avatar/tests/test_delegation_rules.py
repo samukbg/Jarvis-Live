@@ -20,3 +20,11 @@ def test_rules_list_only_the_installed_agents():
 
 def test_every_tool_maps_to_a_detected_agent_id():
     assert {v[0] for v in module._DELEGATION_AGENTS.values()} == {"gemini", "claude", "hermes", "codex"}
+
+
+def test_rules_speak_first_and_search_web_questions_directly():
+    rules = module._delegation_rules(["delegate_to_agy"])
+    assert "ALWAYS SPEAK FIRST" in rules
+    assert "never say the task is done before its result comes back" in rules
+    assert "use Google Search" in rules and "Do not delegate them" in rules
+    assert "web search" not in module._DELEGATION_AGENTS["delegate_to_agy"][2]
