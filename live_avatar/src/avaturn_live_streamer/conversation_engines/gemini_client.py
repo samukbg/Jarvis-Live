@@ -264,6 +264,14 @@ class GeminiApiClient:
     _resume_handle: str | None = attrs.field(init=False, default=None)
     _shutting_down: bool = attrs.field(init=False, default=False)
 
+    # The current Live session (delegation results go here, even after a reconnect). Declared:
+    # the class is slotted, and assigning an undeclared attribute crashed every session.
+    _ws: ClientConnection | None = attrs.field(init=False, default=None)
+    # Backend tools other than phone_action (show_business_dashboard…): name → the backend path
+    # their calls are posted to. Filled at each connect from GET /api/device/tool. Declared:
+    # the class is slotted.
+    _backend_tool_paths: dict[str, str] = attrs.field(init=False, factory=dict)
+
     def _check_is_hybrid_clone(self, avatar_id: str) -> bool:
         av = (avatar_id or "").lower().strip()
         # The built-in AVTR-1 avatars speak with Gemini Live's own voice, streamed as it is
@@ -332,12 +340,17 @@ class GeminiApiClient:
         else:
             full_system_instruction = rules
 
-        # The phone_action tool is defined once, in the backend (backend/device/phoneActions.js).
-        phone = await self._fetch_phone_tool()
-        if phone is not None:
-            tool, prompt = phone
+        # Backend tools are defined once, in the backend (GET /api/device/tool): phone_action
+        # (backend/device/phoneActions.js) and the ones newer backends list with a callback path
+        # (show_business_dashboard → POST /api/business/show).
+        self._backend_tool_paths = {}
+        for entry in await self._fetch_backend_tools() or []:
+            tool = entry["tool"]
             declarations = [*declarations, tool]
-            full_system_instruction = f"{full_system_instruction}\n\n{prompt}"
+            if entry.get("prompt"):
+                full_system_instruction = f"{full_system_instruction}\n\n{entry['prompt']}"
+            if entry.get("path"):
+                self._backend_tool_paths[tool["name"]] = entry["path"]
         # Delegations are non-blocking (Gemini says "I'm on it" while the agent works); web
         # questions go to Google Search (~2 s) instead of an agent (tens of seconds).
         declarations = [{**d, "behavior": "NON_BLOCKING"} if d["name"] in _DELEGATION_AGENTS else d for d in declarations]
@@ -485,7 +498,9 @@ class GeminiApiClient:
                     _LOGGER.debug("agent list unavailable from candidate", base=base, error=str(e))
         return None
 
-    async def _fetch_phone_tool(self) -> tuple[dict[str, Any], str] | None:
+    async def _fetch_backend_tools(self) -> list[dict[str, Any]] | None:
+        """The backend's tools for this session: phone_action ({tool, prompt}), then each of the
+        `tools` newer backends list ({tool, prompt, path}). None when the backend is unreachable."""
         bases, headers = self._backend_targets()
         async with httpx.AsyncClient(timeout=4.0) as client:
             for base in bases:
@@ -493,11 +508,36 @@ class GeminiApiClient:
                     res = await client.get(f"{base}/api/device/tool", headers=headers)
                     if res.is_success:
                         data = res.json()
-                        return data["tool"], data.get("prompt", "")
+                        tools: list[dict[str, Any]] = [{"tool": data["tool"], "prompt": data.get("prompt", "")}]
+                        for t in data.get("tools") or []:
+                            ok = isinstance(t, dict) and isinstance(t.get("tool"), dict) and t["tool"].get("name")
+                            if ok and isinstance(t.get("path"), str) and t["path"].startswith("/api/"):
+                                tools.append({"tool": t["tool"], "prompt": t.get("prompt", ""), "path": t["path"]})
+                        return tools
                 except Exception as e:
-                    _LOGGER.debug("phone tool unavailable from candidate", base=base, error=str(e))
+                    _LOGGER.debug("backend tools unavailable from candidate", base=base, error=str(e))
         _LOGGER.warning("phone_action tool unavailable: Jarvis backend not reachable")
         return None
+
+    async def _execute_backend_tool(self, path: str, args: dict[str, Any]) -> str:
+        """Posts a backend tool's arguments to its path; its `result` is what Gemini says. An older
+        backend without the route (404) or none reachable: a sentence saying it's unavailable."""
+        bases, headers = self._backend_targets()
+        missing = False
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for base in bases:
+                try:
+                    res = await client.post(f"{base}{path}", json={**args, "via": "avatar"}, headers=headers)
+                except Exception as e:
+                    _LOGGER.debug("backend tool failed via candidate", base=base, path=path, error=str(e))
+                    continue
+                if res.is_success:
+                    return str(res.json().get("result") or "Done.")
+                missing = missing or res.status_code == 404
+                _LOGGER.warning("backend tool returned an error", base=base, path=path, status=res.status_code)
+        if missing:
+            return "This is not available on the user's Jarvis server yet (it needs an update). Tell the user briefly."
+        return "Could not reach the user's Jarvis server for this. Tell the user it is unavailable right now."
 
     async def _execute_phone_action(self, args: dict[str, Any]) -> str:
         bases, headers = self._backend_targets()
@@ -628,6 +668,11 @@ class GeminiApiClient:
                     if name == "phone_action":
                         _LOGGER.info("Gemini Live phone action", action=args.get("action"))
                         result_text = await self._execute_phone_action(args)
+                        function_responses.append({"id": call_id, "name": name, "response": {"result": result_text}})
+                        continue
+                    if name in self._backend_tool_paths:
+                        _LOGGER.info("Gemini Live backend tool", tool=name)
+                        result_text = await self._execute_backend_tool(self._backend_tool_paths[name], args)
                         function_responses.append({"id": call_id, "name": name, "response": {"result": result_text}})
                         continue
                     agent = name.removeprefix("delegate_to_") if name in _DELEGATION_AGENTS else "agy"

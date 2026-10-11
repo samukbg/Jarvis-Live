@@ -77,7 +77,8 @@ Jarvis **auto-detects** which agent CLIs are installed, lists their models, rout
 
 ### Command center (web client)
 - **Neural map**: a live three.js visualization of Jarvis and its agents.
-- **Live cards**: weather, finance, flights, sports, charts, recipes, task roadmaps, translations, media, system telemetry and multi-chain crypto wallets, detected from answers and enriched with live data.
+- **Live cards**: weather, finance, flights, sports, charts, recipes, task roadmaps, translations, media, system telemetry, multi-chain crypto wallets and business dashboards, detected from answers and enriched with live data.
+- **Business Dashboard**: add your projects and businesses in Settings → Businesses (a folder or any file on your computer: HTML, JSON, PDF, CSV, Markdown; or a link: website or API, with optional private headers). Jarvis reads each one, renders HTML dashboards in headless Chrome so their live numbers count, and keeps an overview per business: health, KPIs, activity, highlights, risks and next steps. Ask *"How's my business?"* to open the card. Secret files (`.env`, keys) are never read, and the files stay on your computer.
 - **Vision**: let Jarvis see through your camera or a shared screen.
 - **Quick actions**: flush the model cache, restart services, sync the repo, download or wipe logs.
 - Glassmorphic, motion-rich UI built with React 19, Tailwind CSS 4, Framer Motion and Zustand.

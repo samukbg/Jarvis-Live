@@ -42,3 +42,6 @@ live_avatar/reference_voices/*.mp3
 .vscode/
 *.swp
 avatar-source.json
+
+# Settings → Businesses (may hold an API's auth headers)
+business-sources.json

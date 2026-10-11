@@ -38,3 +38,21 @@ test('session replaced while the agent worked (1011): the answer arrives as a te
   p.session = null;
   p.deliverResult(old, { id: 'c2', name: 'delegate_to_agy' }, 'x', 'y'); // no session: no throw
 });
+
+test('show_business_dashboard: declared, opens the card, Gemini speaks the overview', async () => {
+  const declared = liveTools('agy')[1].functionDeclarations.find((d) => d.name === 'show_business_dashboard');
+  assert.ok(declared);
+  assert.match(liveInstruction('agy'), /show_business_dashboard/);
+  const shown = [];
+  const responses = [];
+  let callbacks;
+  const p = new GeminiLiveProvider({
+    createClient: () => ({ live: { connect: async (o) => { callbacks = o.callbacks; return { sendToolResponse: (m) => responses.push(m) }; } } }),
+    broadcast() {}, broadcastLog() {}, broadcastNotification() {}, broadcastAgentStatus() {},
+    business: { show: ({ focus }) => { shown.push(focus); return { spoken: 'Acme is thriving.' }; } },
+  });
+  await p.connect('agy');
+  await callbacks.onmessage({ toolCall: { functionCalls: [{ id: 'b1', name: 'show_business_dashboard', args: { name: 'Acme' } }] } });
+  assert.deepEqual(shown, ['Acme']);
+  assert.deepEqual(responses[0].functionResponses, [{ id: 'b1', name: 'show_business_dashboard', response: { result: 'Acme is thriving.' } }]);
+});

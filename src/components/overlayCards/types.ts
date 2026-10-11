@@ -9,7 +9,8 @@ export const SPECIAL_CONTENT_TYPES = [
   'chart',
   'sports',
   'recipe',
-  'wallet'
+  'wallet',
+  'business_dashboard'
 ] as const;
 
 export type SpecialContentType = typeof SPECIAL_CONTENT_TYPES[number];
@@ -331,6 +332,49 @@ export interface WalletData {
   recentTransactions?: WalletTransaction[];
 }
 
+/** One of the user's projects or businesses, read from a folder on their computer or a website
+ * (Settings → Businesses). Every field comes from that source or the analysis of it. */
+export interface BusinessKpi {
+  label: string;
+  value: string;
+  /** Short context under the value ("last 30 days"). */
+  hint?: string;
+  trend?: 'up' | 'down' | 'flat';
+}
+
+export interface BusinessOverview {
+  id: string;
+  name: string;
+  kind: 'project' | 'business';
+  source: 'folder' | 'website';
+  /** The folder path or the website's address. */
+  location: string;
+  tagline?: string;
+  /** Two or three sentences: what it is and where it stands. */
+  summary?: string;
+  /** 0-100: momentum and condition as the analysis sees them. */
+  health?: number;
+  status?: 'thriving' | 'steady' | 'needs attention';
+  stage?: string;
+  logoUrl?: string;
+  kpis?: BusinessKpi[];
+  /** Activity over time (commits per week for a folder with git history). */
+  activity?: { label: string; points: Array<{ t: number; value: number }> };
+  highlights?: string[];
+  risks?: string[];
+  nextSteps?: string[];
+  /** ISO time of the analysis. */
+  updatedAt?: string;
+}
+
+export interface BusinessDashboardData {
+  businesses: BusinessOverview[];
+  /** The one to open on (else the first). */
+  focusId?: string;
+  /** No sources yet: the card invites the user to add one in Settings. */
+  empty?: boolean;
+}
+
 export interface DetectedSpecialContent {
   type: SpecialContentType;
   data: 
@@ -344,6 +388,7 @@ export interface DetectedSpecialContent {
     | ChartData 
     | SportsScoreData 
     | RecipeData
-    | WalletData;
+    | WalletData
+    | BusinessDashboardData;
   summaryText?: string;
 }

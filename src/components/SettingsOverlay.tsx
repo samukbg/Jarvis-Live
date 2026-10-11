@@ -5,6 +5,7 @@ import { Pressable, Sheet, alpha, palette } from '../ui';
 import { CreateAvatarModal } from './CreateAvatarModal';
 import { Section } from './SettingsSection';
 import { AvatarServerSection } from './ComputerSettings';
+import { BusinessSettings } from './BusinessSettings';
 
 const AVATAR_OPTIONS = [
   'maria', 'ben', 'kate', 'john', 'oliver', 'clara', 'ming', 
@@ -180,6 +181,10 @@ export const SettingsOverlay: React.FC = () => {
               </div>
             </div>
           </Section>
+
+          {/* Right after Conversation: the user's own business is what they come back to; the server
+              and avatar sections below are set up once. Shown only to this computer's owner. */}
+          <BusinessSettings open={settingsOpen} />
 
           <Section title="Server" aside={<span className="t-footnote" style={{ color: serverError ? palette.warning : palette.textTertiary }}>{activeServerName || (serverError ? 'Not connected' : 'Connecting…')}</span>}>
             <input type="text" value={localHost} onChange={e => setLocalHost(e.target.value)} placeholder="https://your-domain.com or http://192.168.1.10:4000" className={input} />

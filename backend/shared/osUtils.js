@@ -60,3 +60,12 @@ export function shellArg(arg, platform = process.platform) {
   if (platform !== 'win32' || typeof arg !== 'string') return arg;
   return `"${arg.replace(/\r?\n/g, ' ').replace(/"/g, '\u201d')}"`;
 }
+
+/** Where agent CLIs run: JARVIS_AGENT_CWD, else the user's home folder. */
+export function agentWorkdir() {
+  return process.env.JARVIS_AGENT_CWD || os.homedir();
+}
+
+export function agentSpawnOptions(baseOptions = {}) {
+  return getSpawnOptions({ cwd: agentWorkdir(), ...baseOptions });
+}

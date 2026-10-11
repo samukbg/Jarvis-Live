@@ -42,7 +42,7 @@ def test_reconnects_after_a_1011_and_resumes_the_conversation(monkeypatch):
             async def no_backend(*_a, **_k):
                 return None
             monkeypatch.setattr(gemini_client.GeminiApiClient, "_fetch_installed_agents", no_backend)
-            monkeypatch.setattr(gemini_client.GeminiApiClient, "_fetch_phone_tool", no_backend)
+            monkeypatch.setattr(gemini_client.GeminiApiClient, "_fetch_backend_tools", no_backend)
 
             bus = EventBus()
             task = asyncio.create_task(client.run(bus.clone(), None))

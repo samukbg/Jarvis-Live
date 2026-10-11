@@ -1,5 +1,6 @@
 import { Modality } from '@google/genai';
 import { PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from '../../device/phoneActions.js';
+import { BUSINESS_PROMPT, BUSINESS_TOOL } from '../../business/card.js';
 import { TranscriptBuffer } from '../transcript.js';
 import { acknowledgement } from '../acknowledge.js';
 
@@ -18,7 +19,9 @@ Questions a web search can answer (weather, news, events, opening hours, prices,
 Tasks that need the user's computer (open or control apps such as Spotify, files, folders, scripts, downloads, coding, creating apps, browsing websites, long multi-step research): never say you cannot do it — call the \`${tool}\` tool. It runs in the background on the user's computer with the ${name} agent.
 ALWAYS speak first: as you call it, tell the user in one short sentence, in their language, that you are on it (e.g. "I'm on it, I'm asking ${name}." / "Je m'en occupe, je demande à ${name}." / "Estou nisso, vou pedir ao ${name}."). Never stay silent and never say the task is done before its result comes back. When the result comes back, tell the user what it says, briefly and naturally.
 
-${PHONE_ACTION_PROMPT}`;
+${PHONE_ACTION_PROMPT}
+
+${BUSINESS_PROMPT}`;
 }
 
 /** Google Search (answers in ~2 s) plus the agent (non-blocking: Gemini keeps talking while it works). */
@@ -35,7 +38,7 @@ export function liveTools(agent) {
           properties: { task: { type: 'STRING', description: 'The detailed task instruction to send to the agent' } },
           required: ['task'],
         },
-      }, PHONE_ACTION_TOOL],
+      }, PHONE_ACTION_TOOL, BUSINESS_TOOL],
     },
   ];
 }
@@ -50,6 +53,8 @@ export class GeminiLiveProvider {
     this.broadcastAgentStatus = options.broadcastAgentStatus;
     this.delegateToAgent = options.delegateToAgent;
     this.phoneBridge = options.phoneBridge;
+    // Business Dashboard (business/service.js): show_business_dashboard opens the card.
+    this.business = options.business || null;
     this.speak = options.speak;
     
     this.session = null;
@@ -190,6 +195,21 @@ export class GeminiLiveProvider {
                     this.broadcastLog(`[GEMINI ERROR] Phone action response failed: ${e.message}`);
                   }
                 })();
+              } else if (fc && fc.name === BUSINESS_TOOL.name) {
+                // Local data, answered at once: the card opens and Gemini speaks the overview it gets back.
+                let result;
+                try {
+                  result = this.business
+                    ? this.business.show({ focus: fc.args?.name || undefined }).spoken
+                    : 'The business dashboard is not available on this Jarvis server.';
+                } catch (e) {
+                  result = `The business dashboard could not be opened: ${e.message}`;
+                }
+                try {
+                  this.session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] });
+                } catch (e) {
+                  this.broadcastLog(`[GEMINI ERROR] Business dashboard response failed: ${e.message}`);
+                }
               } else if (fc && fc.name === `delegate_to_${this.targetAgent}`) {
                 const task = fc.args.task;
                 // Non-blocking: Gemini goes on talking ("I'm on it…") while the agent works. The

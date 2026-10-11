@@ -39,7 +39,7 @@ const firstMatch = (text: string, ...patterns: RegExp[]) => {
 
 // ── Structured JSON (preferred) ─────────────────────────────────────────────
 
-const JSON_TYPES = ['weather', 'finance', 'flight', 'system', 'task_roadmap', 'media_audio', 'translation', 'chart', 'sports', 'recipe', 'wallet'] as const;
+const JSON_TYPES = ['weather', 'finance', 'flight', 'system', 'task_roadmap', 'media_audio', 'translation', 'chart', 'sports', 'recipe', 'wallet', 'business_dashboard'] as const;
 
 const isNum = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
 
@@ -58,6 +58,7 @@ function hasCoreFields(type: string, d: any): boolean {
     case 'sports': return isNum(d.teamA?.score) && isNum(d.teamB?.score);
     case 'recipe': return Array.isArray(d.ingredients) && d.ingredients.length > 0;
     case 'wallet': return typeof d.address === 'string';
+    case 'business_dashboard': return Array.isArray(d.businesses) && (d.businesses.length > 0 || d.empty === true);
     default: return false;
   }
 }

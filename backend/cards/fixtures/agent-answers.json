@@ -108,5 +108,10 @@
     "expected": "flight",
     "question": "Le vol LH1035 est-il à l’heure ?",
     "answer": "Non, le vol **LH1035** (Lufthansa) entre Paris-Charles de Gaulle (CDG) et Francfort (FRA) n'était pas à l'heure aujourd'hui. Il est d'ores et déjà arrivé à destination avec du retard :\n\n* **Départ (CDG - Terminal 1) :** parti de la porte à **15h48** au lieu de **14h35** (*~1h13 de retard*).\n* **Arrivée (FRA - Terminal 1) :** atterri et arrivé à la porte d'embarquement à **16h48** au lieu de **15h50** initialement prévu (*58 minutes de retard*).\n\nLe vol est actuellement posé et débarqué à Francfort."
+  },
+  {
+    "expected": "business_dashboard",
+    "question": "How is my business doing?",
+    "answer": "Acme Invoices is thriving — Invoices for freelancers.\n\n```json\n{\"type\":\"business_dashboard\",\"summary\":\"Acme Invoices is thriving — Invoices for freelancers.\",\"data\":{\"businesses\":[{\"id\":\"b1a2b3c4d5\",\"name\":\"Acme Invoices\",\"kind\":\"project\",\"source\":\"folder\",\"location\":\"/Users/me/acme\",\"tagline\":\"Invoices for freelancers\",\"status\":\"thriving\",\"health\":82,\"kpis\":[{\"label\":\"Commits (30d)\",\"value\":\"30\",\"trend\":\"up\"},{\"label\":\"Contributors (90d)\",\"value\":\"2\"}],\"activity\":{\"label\":\"Commits / week\",\"points\":[{\"t\":1757000000000,\"value\":4},{\"t\":1757600000000,\"value\":9}]},\"highlights\":[\"Latest release v0.4.1\"]}]}}\n```"
   }
 ]

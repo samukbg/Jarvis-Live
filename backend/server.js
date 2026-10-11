@@ -33,9 +33,12 @@ import { WorkerRegistry } from './hermes/WorkerRegistry.js';
 import { CapabilityRegistry } from './hermes/CapabilityRegistry.js';
 import { ConversationRuntime } from './conversation/ConversationRuntime.js';
 import { registerCardRoutes } from './cards/index.js';
+import { createBusinessService } from './business/service.js';
+import { registerBusinessRoutes } from './business/routes.js';
+import { BUSINESS_PROMPT, BUSINESS_TOOL } from './business/card.js';
 import { GeminiLiveProvider } from './conversation/providers/GeminiLiveProvider.js';
 import { PhoneBridge, PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from './device/phoneActions.js';
-import { isAuthorized } from './shared/auth.js';
+import { isAuthorized, requestKey } from './shared/auth.js';
 import { callbackUrl, createAvatarSource, lanAddress } from './avatar/avatarSource.js';
 import { createStatusCollector } from './system/serverStatus.js';
 import { createAgentDetector } from './agents/detect.js';
@@ -723,7 +726,13 @@ app.post(['/api/avatar/delete', '/api/avatar/delete/'], async (req, res) => {
 app.get('/api/device/tool', (req, res) => {
   const key = req.headers['x-api-key'] || req.query.api_key;
   if (!isAuthorized(key, process.env, req.path)) return res.status(401).json({ error: 'Unauthorized' });
-  res.json({ tool: PHONE_ACTION_TOOL, prompt: PHONE_ACTION_PROMPT });
+  // `tools`: more backend tools for the avatar's session, each called back by POSTing its
+  // arguments to `path` ({ result } is what Gemini says). Older streamers ignore the field.
+  res.json({
+    tool: PHONE_ACTION_TOOL,
+    prompt: PHONE_ACTION_PROMPT,
+    tools: [{ tool: BUSINESS_TOOL, prompt: BUSINESS_PROMPT, path: '/api/business/show' }],
+  });
 });
 
 app.post('/api/device/action', async (req, res) => {
@@ -1610,9 +1619,14 @@ const conversationRuntime = new ConversationRuntime({
   executeFallbackOrchestration: (cmd, src) => executeOrchestration(cmd, src),
   runHermesAgent: (agentId, cmd) => runHermesAgent(agentId, cmd)
 });
+// Settings → Businesses: sources analysed in the background, the Business Dashboard card
+// (business/). Created here, after broadcast's clients exist.
+const businessService = createBusinessService({ dataDir: DATA_DIR, broadcast, log: (line) => { console.log(line); broadcastLog(line); } });
+
 const geminiLiveProvider = new GeminiLiveProvider({
   createClient: createGeminiClient,
   phoneBridge,
+  business: businessService,
   broadcast,
   broadcastAudioChunk,
   broadcastLog,
@@ -2420,6 +2434,11 @@ app.get('/api/spotify/state', async (req, res) => {
 
 // ── Rich result cards: real data behind them ─────────────────────────────────
 registerCardRoutes(app);
+// Whoever holds this server's API_KEY is its owner (no Jarvis Cloud tokens here).
+registerBusinessRoutes(app, {
+  service: businessService,
+  role: (req) => (isAuthorized(requestKey(req)) ? 'owner' : null),
+});
 
 // ── AVTR-1 renderer (WSL) ───────────────────────────────────────────────────
 // The renderer runs in WSL, started by boot.bat. Twice after a full reboot it hung
