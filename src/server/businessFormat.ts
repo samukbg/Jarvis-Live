@@ -120,3 +120,29 @@ export function portfolioLine(list: Array<{ status?: BusinessStatus }>): string 
   }
   return parts.join(' · ');
 }
+
+/**
+ * Where an <img> loads a business logo from: absolute URLs as they are; a Jarvis Server path
+ * ("/api/business/logo/acme.io") on that server, with the key in the query (an <img> sends no
+ * headers).
+ */
+export function logoSrc(url: string | undefined, base: string, key: string): string | undefined {
+  if (!url) return undefined;
+  if (/^(https?:|data:)/i.test(url)) return url;
+  if (!url.startsWith('/')) return undefined;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${base.replace(/\/+$/, '')}${url}${key ? `${sep}api_key=${encodeURIComponent(key)}` : ''}`;
+}
+
+const SYMBOLS: Record<string, string> = { USD: '$', EUR: '€', GBP: '£', BRL: 'R$', JPY: '¥', CAD: 'CA$', AUD: 'A$', CHF: 'CHF ' };
+/** "$" for USD (the currency's symbol, else its code and a space). */
+export const currencySymbol = (currency = 'USD') => SYMBOLS[currency.toUpperCase()] ?? `${currency.toUpperCase()} `;
+
+/** Gain / loss wording: { sign: '+' | '−' | '', tone: 'success' | 'danger' | 'muted' }. */
+export function changeTone(change: number | undefined): { sign: string; tone: 'success' | 'danger' | 'muted' } {
+  if (change === undefined || !Number.isFinite(change) || change === 0) return { sign: '', tone: 'muted' };
+  return change > 0 ? { sign: '+', tone: 'success' } : { sign: '−', tone: 'danger' };
+}
+
+/** "month" → "mo", "year" → "yr" (the period after a revenue figure). */
+export const periodShort = (period = 'month') => ({ month: 'mo', year: 'yr', week: 'wk', day: 'day' } as Record<string, string>)[period] ?? period;

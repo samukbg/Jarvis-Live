@@ -10,6 +10,7 @@ import { analyse as analyseFacts, scrub } from './analyse.js';
 import { dashboardData, dashboardText, spokenOverview } from './card.js';
 import { detectLocalFormat, scanSource } from './scan.js';
 import { checkHost } from './scanWebsite.js';
+import { attachLogos, logoFile } from './logos.js';
 import { createBusinessStore, normalizeTarget, publicView, SOURCE_KINDS, validateHeaders } from './store.js';
 
 const KIND_ALIASES = { folder: 'folder', file: 'folder', path: 'folder', website: 'website', link: 'website', url: 'website', api: 'website' };
@@ -48,6 +49,8 @@ export function createBusinessService({
     try {
       const facts = await scan(source, { lookup });
       const { overview, overviews, analyser } = await analyse(facts, { id, env, log });
+      // Each business's own icon from its website, cached here (logos.js).
+      await attachLogos([overview, ...(overviews || [])], { dataDir, lookup, log });
       const current = store.get(id);
       if (!current) return;
       store.update(id, {
@@ -130,6 +133,9 @@ export function createBusinessService({
 
     /** Opens the card on the apps; `spoken` is what the voice model tells the user. */
     show: showCard,
+
+    /** A business logo cached by an analysis: { file, type } or null. */
+    logo: (host) => logoFile(dataDir, host),
 
     /** Resolves when the queued analyses are done (tests). */
     idle: () => chain,

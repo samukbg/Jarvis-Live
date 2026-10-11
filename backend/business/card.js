@@ -67,9 +67,52 @@ export function dashboardData(sources, { focus } = {}) {
       return out;
     }),
   };
+  const totals = portfolioTotals(data.businesses);
+  if (totals) data.totals = totals;
   const focusId = resolveFocus(sources, focus);
   if (focusId) data.focusId = focusId;
   return data;
+}
+
+const cents = (v) => Math.round(v * 100) / 100;
+
+/**
+ * The portfolio's overall revenue and its gain / loss: the sum over the businesses that state a
+ * revenue (one currency — the most common; others are left out rather than mixed). `change` only
+ * counts businesses that also state the previous period's figure. Undefined without revenue.
+ */
+export function portfolioTotals(businesses) {
+  const withRevenue = businesses.filter((b) => b.revenue && Number.isFinite(b.revenue.amount));
+  if (!withRevenue.length) return undefined;
+  const counts = {};
+  for (const b of withRevenue) counts[b.revenue.currency || 'USD'] = (counts[b.revenue.currency || 'USD'] || 0) + 1;
+  const currency = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  const same = withRevenue.filter((b) => (b.revenue.currency || 'USD') === currency);
+  const revenue = cents(same.reduce((s, b) => s + b.revenue.amount, 0));
+  const compared = same.filter((b) => Number.isFinite(b.revenue.previous));
+  const out = { revenue, currency, period: same[0].revenue.period || 'month', businesses: same.length };
+  if (compared.length) {
+    const now = compared.reduce((s, b) => s + b.revenue.amount, 0);
+    const before = compared.reduce((s, b) => s + b.revenue.previous, 0);
+    out.previous = cents(before);
+    out.change = cents(now - before);
+    if (before > 0) out.changePercent = Math.round(((now - before) / before) * 1000) / 10;
+  }
+  return out;
+}
+
+const money = (v, currency) => {
+  try { return new Intl.NumberFormat('en-US', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v); } catch { return `${v} ${currency}`; }
+};
+
+/** "Overall $1,558.72 a month, up $174.30 (12.6%) from last month." — or undefined. */
+export function totalsSentence(t) {
+  if (!t) return undefined;
+  const head = `Overall ${money(t.revenue, t.currency)} a ${t.period || 'month'}`;
+  if (t.change === undefined) return `${head}.`;
+  if (t.change === 0) return `${head}, flat on the previous ${t.period || 'month'}.`;
+  const pct = t.changePercent !== undefined ? ` (${Math.abs(t.changePercent)}%)` : '';
+  return `${head}, ${t.change > 0 ? 'up' : 'down'} ${money(Math.abs(t.change), t.currency)}${pct} from last ${t.period || 'month'}.`;
 }
 
 const statusWord = (b) => b.status || (b.health !== undefined ? `health ${b.health}/100` : 'analysed');
@@ -84,9 +127,10 @@ export function dashboardSummary(data) {
   const attention = list.filter((b) => b.status === 'needs attention').map((b) => b.name);
   const thriving = list.filter((b) => b.status === 'thriving').map((b) => b.name);
   const parts = [`Here are your ${list.length} businesses`];
+  const overall = totalsSentence(data.totals);
   if (thriving.length) parts.push(`${thriving.slice(0, 3).join(', ')} ${thriving.length === 1 ? 'is' : 'are'} thriving`);
   if (attention.length) parts.push(`${attention.slice(0, 3).join(', ')} ${attention.length === 1 ? 'needs' : 'need'} attention`);
-  return `${parts.join('; ')}.`;
+  return `${parts.join('; ')}.${overall ? ` ${overall}` : ''}`;
 }
 
 /** The agent_result text: the sentence, then the card as a fenced JSON block. */
@@ -109,6 +153,7 @@ export function spokenOverview(data, { pending = 0 } = {}) {
     const note = b.risks?.[0] && b.status === 'needs attention' ? ` Risk: ${b.risks[0]}` : b.highlights?.[0] ? ` ${b.highlights[0]}` : '';
     return `- ${b.name}: ${statusWord(b)}${facts.length ? `; ${facts.join(', ')}` : ''}.${note}`;
   });
-  const head = focus ? 'The dashboard is on screen, focused on this business:' : `The dashboard is on screen with ${list.length} business${list.length > 1 ? 'es' : ''}:`;
+  const overall = !focus && totalsSentence(data.totals);
+  const head = focus ? 'The dashboard is on screen, focused on this business:' : `The dashboard is on screen with ${list.length} business${list.length > 1 ? 'es' : ''}:${overall ? ` ${overall}` : ''}`;
   return `${head}\n${lines.join('\n')}${pending ? `\n(${pending} more source${pending > 1 ? 's are' : ' is'} still being analysed.)` : ''}`;
 }

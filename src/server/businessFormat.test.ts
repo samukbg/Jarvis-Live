@@ -78,3 +78,14 @@ test('business: a source\'s title before it is named', () => {
   assert.equal(sourceTitle('file', 'C:\\Users\\sam\\dash.html'), 'dash.html');
   assert.equal(sourceTitle('website', 'https://www.example.com/v1/stats'), 'example.com');
 });
+
+test('logoSrc: server paths get the server and the key; absolute URLs stay', async () => {
+  const { logoSrc, changeTone, currencySymbol, periodShort } = await import('./businessFormat.ts');
+  assert.equal(logoSrc('/api/business/logo/acme.io', 'http://localhost:4000/', 'k 1'), 'http://localhost:4000/api/business/logo/acme.io?api_key=k%201');
+  assert.equal(logoSrc('https://acme.io/icon.png', 'http://x', 'k'), 'https://acme.io/icon.png');
+  assert.equal(logoSrc('icon.png', 'http://x', 'k'), undefined);
+  assert.deepEqual(changeTone(-3), { sign: '−', tone: 'danger' });
+  assert.deepEqual(changeTone(0), { sign: '', tone: 'muted' });
+  assert.equal(currencySymbol('eur'), '€');
+  assert.equal(periodShort('month'), 'mo');
+});

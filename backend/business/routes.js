@@ -18,6 +18,15 @@ export function registerBusinessRoutes(app, { service, role, avatarOrigin = () =
   const manages = (req) => ['owner', 'app'].includes(role(req));
   const originOf = (req) => (ORIGINS.includes(req.body?.origin) ? req.body.origin : undefined);
 
+  // A business's icon (business/logos.js), loaded by the apps' <img>/<Image> (?api_key=).
+  app.get('/api/business/logo/:host', (req, res) => {
+    if (!manages(req)) return res.status(403).json(FORBIDDEN);
+    const logo = service.logo(String(req.params.host || '').toLowerCase());
+    if (!logo) return res.status(404).json({ error: 'No logo for that business' });
+    res.set({ 'Content-Type': logo.type, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
+    res.sendFile(logo.file);
+  });
+
   app.get('/api/business/sources', (req, res) => {
     if (!manages(req)) return res.status(403).json(FORBIDDEN);
     res.json({ sources: service.sources() });

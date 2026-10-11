@@ -4,12 +4,12 @@ import {
   ArrowRight, Briefcase, ChartLine, ChevronLeft, ChevronRight, Clock, File as FileIcon, Folder, Globe, LayoutGrid, Settings,
   Sparkles, TrendingDown, TrendingUp, TriangleAlert, Minus,
 } from 'lucide-react';
-import type { BusinessDashboardData, BusinessKpi, BusinessOverview } from './types';
+import type { BusinessDashboardData, BusinessKpi, BusinessOverview, BusinessTotals } from './types';
 import { CardShell, CountUp, EASE, Pill, Reveal, RingGauge, SectionLabel, fmt, palette } from './kit';
 import { ScrubChart } from './motion';
-import { useStore } from '../../store';
+import { API_KEY, BACKEND_HTTP, useStore } from '../../store';
 import {
-  countable, displayLocation, initialOf, initialView, portfolioLine, statusLabel, statusTone, timeAgo, toMs,
+  changeTone, countable, currencySymbol, displayLocation, initialOf, initialView, logoSrc, periodShort, portfolioLine, statusLabel, statusTone, timeAgo, toMs,
 } from '../../server/businessFormat';
 
 // The Business Dashboard: an overview of each project / business the user added in
@@ -37,10 +37,11 @@ const KindPill: React.FC<{ b: BusinessOverview }> = ({ b }) => {
 const Logo: React.FC<{ b: BusinessOverview; size?: number }> = ({ b, size = 52 }) => {
   const [broken, setBroken] = useState(false);
   const radius = Math.round(size * 0.26);
-  if (b.logoUrl && !broken) {
+  const src = logoSrc(b.logoUrl, BACKEND_HTTP, API_KEY);
+  if (src && !broken) {
     return (
       <div className="grid shrink-0 place-items-center overflow-hidden border border-white/15 bg-white" style={{ width: size, height: size, borderRadius: radius, boxShadow: `0 0 24px ${BUSINESS_ACCENT}26` }}>
-        <img src={b.logoUrl} alt="" className="h-full w-full object-contain p-[12%]" onError={() => setBroken(true)} draggable={false} />
+        <img src={src} alt="" className="h-full w-full object-contain p-[12%]" onError={() => setBroken(true)} draggable={false} />
       </div>
     );
   }
@@ -228,8 +229,62 @@ const Detail: React.FC<{ b: BusinessOverview }> = ({ b }) => {
   );
 };
 
+const CHANGE_TONE = { success: palette.success, danger: palette.danger, muted: palette.muted };
+
+/** "+$174.30 (12.6%)" in green, "−$20.00 (4.1%)" in red, with an arrow; nothing without a change. */
+const ChangeBadge: React.FC<{ t: BusinessTotals; big?: boolean }> = ({ t, big }) => {
+  if (t.change === undefined) return null;
+  const { sign, tone } = changeTone(t.change);
+  const color = CHANGE_TONE[tone];
+  const Icon = tone === 'success' ? TrendingUp : tone === 'danger' ? TrendingDown : Minus;
+  const sym = currencySymbol(t.currency);
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border font-bold tabular-nums ${big ? 'px-2.5 py-1 text-[13px]' : 'px-2 py-0.5 text-[11px]'}`} style={{ color, background: `${color}1f`, borderColor: `${color}55` }}>
+      <Icon size={big ? 14 : 12} />
+      {sign}{sym}{fmt(Math.abs(t.change), 2, 2)}
+      {t.changePercent !== undefined && <span className="font-semibold opacity-80">({Math.abs(t.changePercent)}%)</span>}
+    </span>
+  );
+};
+
+/** The portfolio's overall revenue and its gain / loss vs the previous period (the "All" view). */
+const TotalsBanner: React.FC<{ t: BusinessTotals }> = ({ t }) => {
+  const { tone } = changeTone(t.change);
+  const glow = CHANGE_TONE[tone];
+  return (
+    <Reveal index={1}>
+      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/35 px-4 py-3.5" style={{ boxShadow: tone === 'muted' ? undefined : `inset 0 0 40px ${glow}14` }}>
+        <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Overall revenue</div>
+            <div className="mt-1 flex items-baseline gap-1.5">
+              <CountUp value={t.revenue} decimals={2} minDecimals={2} prefix={currencySymbol(t.currency)} className="text-[30px] font-bold leading-none" />
+              <span className="text-[13px] text-slate-400">/ {periodShort(t.period)}</span>
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-1">
+            <ChangeBadge t={t} big />
+            <span className="text-[11px] text-slate-500">
+              {t.change !== undefined ? `vs last ${t.period || 'month'}` : ''}{t.change !== undefined ? ' · ' : ''}{t.businesses} {t.businesses === 1 ? 'business' : 'businesses'} with revenue
+            </span>
+          </div>
+        </div>
+      </div>
+    </Reveal>
+  );
+};
+
+/** One line over a business's detail: where the whole portfolio stands. */
+const TotalsStrip: React.FC<{ t: BusinessTotals }> = ({ t }) => (
+  <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-slate-400">
+    <span className="font-semibold uppercase tracking-[0.12em] text-[10px]">Portfolio</span>
+    <span className="font-semibold tabular-nums text-slate-200">{currencySymbol(t.currency)}{fmt(t.revenue, 2, 2)}<span className="font-normal text-slate-500"> / {periodShort(t.period)}</span></span>
+    <ChangeBadge t={t} />
+  </div>
+);
+
 /** Every business at a glance: its ring, status and headline KPI; click one for its detail. */
-const Portfolio: React.FC<{ list: BusinessOverview[]; onOpen: (id: string) => void }> = ({ list, onOpen }) => (
+const Portfolio: React.FC<{ list: BusinessOverview[]; totals?: BusinessTotals; onOpen: (id: string) => void }> = ({ list, totals, onOpen }) => (
   <div className="flex flex-col gap-4">
     <Reveal index={0} className="flex items-end justify-between gap-3">
       <div className="min-w-0">
@@ -237,6 +292,7 @@ const Portfolio: React.FC<{ list: BusinessOverview[]; onOpen: (id: string) => vo
         <div className="mt-0.5 text-[12px] text-slate-400">{portfolioLine(list)}</div>
       </div>
     </Reveal>
+    {totals && <TotalsBanner t={totals} />}
     <div className={`grid gap-2 ${list.length > 1 ? 'sm:grid-cols-2' : ''} ${list.length > 4 ? 'lg:grid-cols-3' : ''}`}>
       {list.map((b, i) => {
         const tone = toneOf(b);
@@ -383,9 +439,10 @@ export const BusinessDashboardCard: React.FC<{ data: BusinessDashboardData }> = 
           <div className="min-w-0 flex-1"><Switcher list={list} value={view} onChange={setPicked} /></div>
         </div>
       )}
+      {view !== 'all' && list.length > 1 && data.totals && <TotalsStrip t={data.totals} />}
       <AnimatePresence mode="wait" initial={false}>
         <motion.div key={view} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2, ease: EASE }}>
-          {view === 'all' ? <Portfolio list={list} onOpen={setPicked} /> : current && <Detail b={current} />}
+          {view === 'all' ? <Portfolio list={list} totals={data.totals} onOpen={setPicked} /> : current && <Detail b={current} />}
         </motion.div>
       </AnimatePresence>
     </CardShell>

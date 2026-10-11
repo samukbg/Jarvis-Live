@@ -356,7 +356,12 @@ export interface BusinessOverview {
   health?: number;
   status?: 'thriving' | 'steady' | 'needs attention';
   stage?: string;
+  /** Its own icon: an absolute URL, or a path on the Jarvis Server ("/api/business/logo/<host>"). */
   logoUrl?: string;
+  /** Its public website ("spreadout.ai"). */
+  website?: string;
+  /** Its main recurring revenue, as numbers (MRR or monthly revenue) — only when the source states it. */
+  revenue?: { amount: number; previous?: number; currency?: string; period?: string };
   kpis?: BusinessKpi[];
   /** Activity over time (commits per week for a folder with git history). */
   activity?: { label: string; points: Array<{ t: number; value: number }> };
@@ -367,8 +372,22 @@ export interface BusinessOverview {
   updatedAt?: string;
 }
 
+/** The whole portfolio's revenue and its gain / loss (businesses that state a revenue, one currency). */
+export interface BusinessTotals {
+  revenue: number;
+  previous?: number;
+  /** revenue − previous over the businesses that state both (negative: a loss). */
+  change?: number;
+  changePercent?: number;
+  currency?: string;
+  period?: string;
+  /** How many businesses the total covers. */
+  businesses: number;
+}
+
 export interface BusinessDashboardData {
   businesses: BusinessOverview[];
+  totals?: BusinessTotals;
   /** The one to open on (else the first). */
   focusId?: string;
   /** No sources yet: the card invites the user to add one in Settings. */
