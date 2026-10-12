@@ -104,12 +104,14 @@ export async function renderPage(url, { limits = RENDER_LIMITS, loadPlaywright =
     await waitForStableText(page, { quietMs: limits.quietMs, maxMs: Math.min(10_000, Math.max(0, left() - 1_000)) });
 
     const first = await page.evaluate(readView);
+    const labels = await page.evaluate(markNav, limits.maxViews).catch(() => []);
     // A sidebar holds the business names: keep the whole page's text for the default view.
-    const firstText = (first.bodyText || first.text).slice(0, limits.firstViewChars);
+    // Without other views to read, the default view may use the whole budget.
+    const firstCap = labels.length ? limits.firstViewChars : limits.maxChars;
+    const firstText = (first.bodyText || first.text).slice(0, firstCap);
     const result = { title: first.title, headings: first.headings, logos: first.logos || [], text: firstText, views: [] };
     let used = firstText.length;
 
-    const labels = await page.evaluate(markNav, limits.maxViews).catch(() => []);
     for (let i = 0; i < labels.length; i++) {
       if (left() < limits.viewMs + 1_000 || used >= limits.maxChars) break;
       try {
