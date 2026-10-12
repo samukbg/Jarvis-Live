@@ -52,7 +52,7 @@ async function scanLocalFile(file, format, { render }) {
       facts.rendered = true;
       facts.renderMs = r.elapsedMs;
       if (r.title) facts.name = r.title;
-      facts.site = { title: r.title, headings: r.headings };
+      facts.site = { title: r.title, headings: r.headings, logos: r.logos };
       facts.texts.push({ label: 'Page (rendered)', text: r.text });
       facts.views = r.views;
       return facts;
@@ -60,7 +60,7 @@ async function scanLocalFile(file, format, { render }) {
       facts.renderError = e.message.split('\n')[0];
       const page = extractHtml(await fs.readFile(file, 'utf8'), pathToFileURL(file).toString());
       if (page.title) facts.name = page.title;
-      facts.site = { title: page.title, description: page.description, headings: page.headings, prices: page.prices };
+      facts.site = { title: page.title, description: page.description, headings: page.headings, prices: page.prices, logos: page.logos };
       facts.texts.push({ label: 'Page', text: page.text });
       return facts;
     }

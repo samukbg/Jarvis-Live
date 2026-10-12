@@ -47,7 +47,13 @@ async function waitForStableText(page, { quietMs, maxMs }) {
 function readView() {
   const main = document.querySelector('main, [role="main"], #content, #main, .content') || document.body;
   const headings = [...document.querySelectorAll('h1, h2, h3')].map((h) => h.innerText.trim()).filter(Boolean).slice(0, 40);
-  return { title: document.title || '', headings, text: (main?.innerText || '').trim(), bodyText: (document.body?.innerText || '').trim() };
+  // Images that say they are a logo / icon (alt, class or file name): a business's own logo.
+  const logos = [...document.querySelectorAll('img')]
+    .map((img) => ({ alt: (img.getAttribute('alt') || '').trim(), src: img.currentSrc || img.src || '', hint: `${img.className || ''} ${img.getAttribute('src') || ''}` }))
+    .filter((l) => /^https?:/i.test(l.src) && /logo|icon/i.test(`${l.alt} ${l.hint}`))
+    .slice(0, 20)
+    .map(({ alt, src }) => ({ alt, src }));
+  return { title: document.title || '', headings, logos, text: (main?.innerText || '').trim(), bodyText: (document.body?.innerText || '').trim() };
 }
 
 /** Runs in the page: tags the in-app navigation entries (same-page links / buttons) and returns their labels. */
@@ -100,7 +106,7 @@ export async function renderPage(url, { limits = RENDER_LIMITS, loadPlaywright =
     const first = await page.evaluate(readView);
     // A sidebar holds the business names: keep the whole page's text for the default view.
     const firstText = (first.bodyText || first.text).slice(0, limits.firstViewChars);
-    const result = { title: first.title, headings: first.headings, text: firstText, views: [] };
+    const result = { title: first.title, headings: first.headings, logos: first.logos || [], text: firstText, views: [] };
     let used = firstText.length;
 
     const labels = await page.evaluate(markNav, limits.maxViews).catch(() => []);
@@ -116,6 +122,7 @@ export async function renderPage(url, { limits = RENDER_LIMITS, loadPlaywright =
         result.views.push({ label: labels[i], text });
         used += text.length;
         for (const h of view.headings) if (!result.headings.includes(h) && result.headings.length < 60) result.headings.push(h);
+        for (const l of view.logos || []) if (!result.logos.some((x) => x.src === l.src) && result.logos.length < 30) result.logos.push(l);
       } catch {
         // A view that does not open is skipped; the others still count.
       }

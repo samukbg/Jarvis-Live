@@ -117,7 +117,7 @@ test('analyse: Gemini with the server key first, then an agent CLI, then the fac
   assert.equal(urls.length, 4);
 
   const failing = async () => ({ ok: false, status: 500 });
-  const c = await analyse(repoFacts, { id: 'b1', env: { GEMINI_API_KEY: 'K' }, fetchImpl: failing, agentCli: async () => ({ id: 'claude', json: { businesses: [{ name: 'Acme CLI' }] } }), now: NOW });
+  const c = await analyse(repoFacts, { id: 'b1', env: { GEMINI_API_KEY: 'K' }, fetchImpl: failing, agentCli: async () => ({ id: 'claude', json: { businesses: [{ name: 'Acme CLI', summary: 'Invoices for freelancers.' }] } }), now: NOW });
   assert.equal(c.analyser, 'claude');
   assert.equal(c.overview.name, 'Acme CLI');
 

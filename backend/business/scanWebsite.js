@@ -113,6 +113,19 @@ export function attrs(tag) {
 
 const PRICE = /(?:[$€£]\s?\d{1,5}(?:[.,]\d{2})?|\d{1,5}(?:[.,]\d{2})?\s?(?:€|EUR|USD))(?:\s?\/\s?(?:mo|month|yr|year|mois|mês|an))?/gi;
 
+/** <img> tags that say they are a logo / icon (alt, class or file name): [{ alt, src }] (absolute http(s)). */
+export function logoImages(html, abs) {
+  const out = [];
+  for (const m of String(html || '').matchAll(/<img\b[^>]*>/gi)) {
+    const a = attrs(m[0]);
+    const src = a.src ? abs(a.src) : null;
+    if (!src || !/^https?:/i.test(src) || !/logo|icon/i.test(`${a.alt || ''} ${a.class || ''} ${a.src}`)) continue;
+    if (!out.some((l) => l.src === src)) out.push({ alt: (a.alt || '').trim(), src });
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
 /**
  * The readable parts of an HTML page (a pure function: tested on sample HTML). Script, style,
  * nav and footer content is left out of the text.
@@ -156,6 +169,7 @@ export function extractHtml(html, baseUrl, { maxChars = FETCH_LIMITS.pageChars }
     image: meta('og:image') ? abs(meta('og:image')) : undefined,
     favicon: abs(iconLink?.href || '/favicon.ico'),
     headings,
+    logos: logoImages(src, abs),
     text,
     prices: [...new Set(text.match(PRICE) || [])].slice(0, 8),
     links: [...new Map(links.map((l) => [l.url, l])).values()],
@@ -202,7 +216,7 @@ export async function scanUrl(url, { headers = {}, allowPrivate = false, limits 
   // A web page: its text and a few pages about the business (about, pricing, product…).
   const page = extractHtml(utf8(), res.url, { maxChars: limits.pageChars });
   facts.name = page.siteName || page.title?.split(/\s[|–—-]\s/)[0]?.trim() || host;
-  facts.site = { title: page.title, description: page.description, siteName: page.siteName, image: page.image, favicon: page.favicon, headings: page.headings, prices: page.prices, pages: [{ url: page.url, title: page.title }] };
+  facts.site = { title: page.title, description: page.description, siteName: page.siteName, image: page.image, favicon: page.favicon, headings: page.headings, prices: page.prices, logos: page.logos, pages: [{ url: page.url, title: page.title }] };
   if (page.text.length < limits.renderBelowChars && render) {
     // Little text in the HTML: a single-page app. Its scripts render the content.
     try {
@@ -210,6 +224,7 @@ export async function scanUrl(url, { headers = {}, allowPrivate = false, limits 
       facts.format = 'web';
       facts.rendered = true;
       facts.site.headings = r.headings.length ? r.headings : page.headings;
+      if (r.logos?.length) facts.site.logos = r.logos;
       facts.texts.push({ label: 'Page (rendered)', text: r.text });
       facts.views = r.views;
       return facts;

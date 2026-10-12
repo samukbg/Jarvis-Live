@@ -62,7 +62,8 @@ export function dashboardData(sources, { focus } = {}) {
   const cut = (a) => (Array.isArray(a) && a.length ? a.slice(0, crowded ? 2 : 3) : undefined);
   const data = {
     businesses: businesses.map((b) => {
-      const out = { ...b, highlights: cut(b.highlights), risks: cut(b.risks), nextSteps: cut(b.nextSteps) };
+      // `logo` (the source's image URL) stays on the server: the card has its cached `logoUrl`.
+      const out = { ...b, logo: undefined, highlights: cut(b.highlights), risks: cut(b.risks), nextSteps: cut(b.nextSteps) };
       for (const k of Object.keys(out)) if (out[k] === undefined || (Array.isArray(out[k]) && !out[k].length)) delete out[k];
       return out;
     }),

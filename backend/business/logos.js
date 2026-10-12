@@ -2,6 +2,7 @@
 // apple-touch-icon its pages declare, else /favicon.ico) and kept in the data dir, so the apps
 // load it from this server (GET /api/business/logo/:host) instead of every device asking the
 // site. Bitmaps first: the phone app can't draw SVG.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { attrs, fetchLimited, FETCH_LIMITS } from './scanWebsite.js';
@@ -126,11 +127,44 @@ export async function ensureLogo(dataDir, host, { fetchImpl, lookup, now = Date.
 }
 
 /**
+ * A logo given as an image URL (the source shows it): cached under "<host>-<hash>" like a
+ * website's icon → its app path, or undefined.
+ */
+export async function ensureLogoImage(dataDir, imageUrl, { fetchImpl, lookup, now = Date.now(), log = () => {} } = {}) {
+  const host = hostOf(imageUrl);
+  if (!host) return undefined;
+  const key = `${host}-${crypto.createHash('sha1').update(imageUrl).digest('hex').slice(0, 10)}`;
+  const entry = readMeta(dataDir)[key];
+  if (entry?.ext && now - entry.at < FRESH_MS && logoFile(dataDir, key)) return logoPath(key, entry.ext);
+  if (entry && !entry.ext && now - entry.at < RETRY_MS) return undefined;
+  try {
+    const res = await fetchLimited(imageUrl, { limits: { ...FETCH_LIMITS, timeoutMs: 10_000, maxBytes: MAX_BYTES }, fetchImpl, lookup });
+    const type = res.status < 400 ? sniffImage(res.body, res.contentType) : null;
+    if (type && res.body.length >= 64 && res.body.length < MAX_BYTES) {
+      const ext = EXT[type];
+      fs.mkdirSync(dirOf(dataDir), { recursive: true });
+      fs.writeFileSync(path.join(dirOf(dataDir), `${key}.${ext}`), res.body);
+      writeMeta(dataDir, { ...readMeta(dataDir), [key]: { ext, at: now, from: imageUrl } });
+      return logoPath(key, ext);
+    }
+  } catch (e) {
+    log(`[BUSINESS] logo image ${host} unavailable (${e.message})`);
+  }
+  writeMeta(dataDir, { ...readMeta(dataDir), [key]: { at: now } });
+  return undefined;
+}
+
+/**
  * Sets `logoUrl` on each overview whose business has a website (its `website`, else the source's
  * own link): the cached icon's app path. Overviews without one keep their monogram.
  */
 export async function attachLogos(overviews, { dataDir, fetchImpl, lookup, log } = {}) {
   for (const o of overviews.filter(Boolean)) {
+    // A logo image the source itself shows for this business comes first (e.g. a plugin's icon).
+    if (o.logo) {
+      const url = await ensureLogoImage(dataDir, o.logo, { fetchImpl, lookup, log }).catch(() => undefined);
+      if (url) { o.logoUrl = url; continue; }
+    }
     const host = hostOf(o.website) || (o.source === 'website' ? hostOf(o.location) : null);
     if (!host) continue;
     try {

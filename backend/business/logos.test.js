@@ -118,3 +118,38 @@ test('inline SVG icons (data: URLs) are kept, and their path says ?type=svg', as
   assert.equal(await ensureLogo(dataDir, 'orb.io', { fetchImpl, lookup }), '/api/business/logo/orb.io?type=svg');
   assert.equal(logoFile(dataDir, 'orb.io').type, 'image/svg+xml');
 });
+
+test('logo images the source shows: extracted, only page-listed ones kept, cached by URL', async () => {
+  const { logoImages } = await import('./scanWebsite.js');
+  const { keepListedLogos } = await import('./analyse.js');
+  const { ensureLogoImage } = await import('./logos.js');
+  const abs = (h) => new URL(h, 'file:///x/index.html').toString();
+  const html = '<h2><img class="logo" src="https://ps.w.org/rss/icon-256x256.png?rev=1" alt="RSS2Post logo"> RSS2Post</h2><img src="https://x.io/chart.png" alt="MRR chart">';
+  assert.deepEqual(logoImages(html, abs), [{ alt: 'RSS2Post logo', src: 'https://ps.w.org/rss/icon-256x256.png?rev=1' }]);
+  const facts = { site: { logos: [{ alt: 'RSS2Post logo', src: 'https://ps.w.org/rss/icon-256x256.png?rev=1' }] } };
+  const result = keepListedLogos({ overview: {}, overviews: [{ name: 'RSS2Post', logo: 'https://ps.w.org/rss/icon-256x256.png?rev=1' }, { name: 'X', logo: 'https://made.up/logo.png' }] }, facts);
+  assert.equal(result.overviews[0].logo, 'https://ps.w.org/rss/icon-256x256.png?rev=1');
+  assert.equal(result.overviews[1].logo, undefined, 'a URL the page does not show is dropped');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biz-logos-'));
+  const fetchImpl = fakeFetch({ 'https://ps.w.org/rss/icon-256x256.png?rev=1': { type: 'image/png', body: PNG } });
+  const url = await ensureLogoImage(dataDir, 'https://ps.w.org/rss/icon-256x256.png?rev=1', { fetchImpl, lookup });
+  assert.match(url, /^\/api\/business\/logo\/ps\.w\.org-[0-9a-f]{10}$/);
+  const list = [{ name: 'RSS2Post', logo: 'https://ps.w.org/rss/icon-256x256.png?rev=1', website: 'wordpress.org' }];
+  await attachLogos(list, { dataDir, fetchImpl, lookup });
+  assert.equal(list[0].logoUrl, url, 'the source\'s own logo beats the website\'s icon');
+});
+
+test('a business the model gave no logo gets the page image whose alt names it', async () => {
+  const { keepListedLogos } = await import('./analyse.js');
+  const facts = { site: { logos: [{ alt: 'RSS2Post logo', src: 'https://ps.w.org/rss/icon.png' }] } };
+  const r = keepListedLogos({ overview: { name: 'Portfolio' }, overviews: [{ name: 'RSS2Post' }, { name: 'Spread Out AI' }] }, facts);
+  assert.equal(r.overviews[0].logo, 'https://ps.w.org/rss/icon.png');
+  assert.equal(r.overviews[1].logo, undefined);
+});
+
+test('substantial: bare-name answers are not used', async () => {
+  const { substantial } = await import('./analyse.js');
+  assert.equal(substantial({ businesses: [{ name: 'Jarvis Cloud' }] }), false);
+  assert.equal(substantial({ businesses: [{ name: 'Jarvis Cloud', status: 'thriving' }] }), true);
+  assert.equal(substantial(null), false);
+});
