@@ -24,7 +24,8 @@ export function registerBusinessRoutes(app, { service, role, avatarOrigin = () =
     const logo = service.logo(String(req.params.host || '').toLowerCase());
     if (!logo) return res.status(404).json({ error: 'No logo for that business' });
     res.set({ 'Content-Type': logo.type, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
-    res.sendFile(logo.file);
+    // dotfiles: the data dir is ~/.jarvis-server (send refuses dot-folder paths by default).
+    res.sendFile(logo.file, { dotfiles: 'allow' });
   });
 
   app.get('/api/business/sources', (req, res) => {

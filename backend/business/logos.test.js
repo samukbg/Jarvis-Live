@@ -160,3 +160,23 @@ test('addressClass: WordPress.com\'s 192.0.64.0/18 is public; 192.0.0.0/24 and 1
   assert.equal(addressClass('192.0.0.8'), 'blocked');
   assert.equal(addressClass('192.0.2.10'), 'blocked');
 });
+
+test('GET /api/business/logo serves the cached file from a data dir under a dot-folder (~/.jarvis-server)', async () => {
+  const express = (await import('express')).default;
+  const { registerBusinessRoutes } = await import('./routes.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'biz-'));
+  const dataDir = path.join(root, '.jarvis-server', 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  const fetchImpl = fakeFetch({ 'https://acme.io/': { type: 'text/html', body: '' }, 'https://acme.io/favicon.ico': { body: ICO } });
+  await ensureLogo(dataDir, 'acme.io', { fetchImpl, lookup });
+  const app = express();
+  registerBusinessRoutes(app, { service: { logo: (h) => logoFile(dataDir, h), sources: () => [] }, role: () => 'owner' });
+  const server = app.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/business/logo/acme.io`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'image/x-icon');
+  } finally {
+    server.close();
+  }
+});
