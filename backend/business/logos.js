@@ -9,7 +9,6 @@ import { attrs, fetchLimited, FETCH_LIMITS } from './scanWebsite.js';
 
 const MAX_BYTES = 512 * 1024;
 const FRESH_MS = 7 * 24 * 3600 * 1000; // a logo is re-fetched weekly
-const RETRY_MS = 24 * 3600 * 1000; // a site without one is asked again the next day
 const EXT = { 'image/png': 'png', 'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' };
 export const LOGO_TYPES = { png: 'image/png', ico: 'image/x-icon', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml' };
 
@@ -97,7 +96,8 @@ export async function ensureLogo(dataDir, host, { fetchImpl, lookup, now = Date.
   const meta = readMeta(dataDir);
   const entry = meta[host];
   if (entry?.ext && now - entry.at < FRESH_MS && logoFile(dataDir, host)) return logoPath(host, entry.ext);
-  if (entry && !entry.ext && now - entry.at < RETRY_MS) return undefined;
+  // A site without one is asked again at the next analysis (they only run when the user adds
+  // or refreshes a source).
   const limits = { ...FETCH_LIMITS, timeoutMs: 10_000, maxBytes: MAX_BYTES };
   let candidates = [];
   try {
@@ -136,7 +136,6 @@ export async function ensureLogoImage(dataDir, imageUrl, { fetchImpl, lookup, no
   const key = `${host}-${crypto.createHash('sha1').update(imageUrl).digest('hex').slice(0, 10)}`;
   const entry = readMeta(dataDir)[key];
   if (entry?.ext && now - entry.at < FRESH_MS && logoFile(dataDir, key)) return logoPath(key, entry.ext);
-  if (entry && !entry.ext && now - entry.at < RETRY_MS) return undefined;
   try {
     const res = await fetchLimited(imageUrl, { limits: { ...FETCH_LIMITS, timeoutMs: 10_000, maxBytes: MAX_BYTES }, fetchImpl, lookup });
     const type = res.status < 400 ? sniffImage(res.body, res.contentType) : null;

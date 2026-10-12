@@ -153,3 +153,10 @@ test('substantial: bare-name answers are not used', async () => {
   assert.equal(substantial({ businesses: [{ name: 'Jarvis Cloud', status: 'thriving' }] }), true);
   assert.equal(substantial(null), false);
 });
+
+test('addressClass: WordPress.com\'s 192.0.64.0/18 is public; 192.0.0.0/24 and 192.0.2.0/24 are not', async () => {
+  const { addressClass } = await import('./scanWebsite.js');
+  assert.equal(addressClass('192.0.77.48'), 'public');
+  assert.equal(addressClass('192.0.0.8'), 'blocked');
+  assert.equal(addressClass('192.0.2.10'), 'blocked');
+});

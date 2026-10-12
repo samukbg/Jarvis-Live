@@ -22,8 +22,10 @@ export function addressClass(ip) {
   let a = String(ip || '').toLowerCase();
   if (a.startsWith('::ffff:') && net.isIPv4(a.slice(7))) a = a.slice(7);
   if (net.isIPv4(a)) {
-    const [p, q] = a.split('.').map(Number);
-    if (p === 0 || p >= 224 || (p === 169 && q === 254) || (p === 192 && q === 0) || (p === 198 && (q === 18 || q === 19))) return 'blocked';
+    const [p, q, r] = a.split('.').map(Number);
+    // 192.0.0.0/24 (protocol assignments) and 192.0.2.0/24 (documentation) only: the rest of
+    // 192.0.x.x is public (WordPress.com's CDN, e.g. ps.w.org, lives in 192.0.64.0/18).
+    if (p === 0 || p >= 224 || (p === 169 && q === 254) || (p === 192 && q === 0 && (r === 0 || r === 2)) || (p === 198 && (q === 18 || q === 19))) return 'blocked';
     if (p === 127 || p === 10 || (p === 172 && q >= 16 && q <= 31) || (p === 192 && q === 168) || (p === 100 && q >= 64 && q <= 127)) return 'private';
     return 'public';
   }
