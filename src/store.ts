@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { detectSpecialContent } from './components/overlayCards/detectSpecialContent';
+import { addToHistory, parseHistory, HISTORY_STORAGE_KEY, type ResultHistoryEntry } from './components/overlayCards/resultHistory';
 import {
   normalizeHost, resolveServer, ServerUnavailableError, wsUrlFor,
   type ResolvedServer, type ServerSettings,
@@ -20,6 +21,10 @@ export interface AgentOutcome {
   agentId: string;
   agentName: string;
   result: string;
+  /** Reopened from the results history (not added to it again). */
+  fromHistory?: boolean;
+  /** When a reopened result was first shown (ms). */
+  shownAt?: number;
 }
 
 export interface FeedItem {
@@ -136,6 +141,13 @@ interface AppState {
   activeAgentConnections: string[];
   agentOutcome: AgentOutcome | null;
   dismissOutcome: () => void;
+  /** Result cards shown on this device, newest first (kept locally, never sent to the server). */
+  resultHistory: ResultHistoryEntry[];
+  historyOpen: boolean;
+  setHistoryOpen: (open: boolean) => void;
+  openFromHistory: (entry: ResultHistoryEntry) => void;
+  removeFromHistory: (id: string) => void;
+  clearHistory: () => void;
   language: string;
   setLanguage: (lang: string) => void;
   isTtsLoading: boolean;
@@ -1050,6 +1062,15 @@ export const useStore = create<AppState>((set, get) => {
       }
       audioQueue.length = 0;
     },
+    resultHistory: loadHistory(),
+    historyOpen: false,
+    setHistoryOpen: (open) => set({ historyOpen: open }),
+    openFromHistory: (entry) => set({
+      historyOpen: false,
+      agentOutcome: { agentId: entry.agentId, agentName: entry.agentName, result: entry.result, fromHistory: true, shownAt: entry.at },
+    }),
+    removeFromHistory: (id) => set((s) => ({ resultHistory: s.resultHistory.filter((e) => e.id !== id) })),
+    clearHistory: () => set({ resultHistory: [] }),
     settingsOpen: false,
     setSettingsOpen: (open) => set({ settingsOpen: open }),
     hostUrl: defaultHost(),
@@ -1147,4 +1168,37 @@ export const useStore = create<AppState>((set, get) => {
       } catch (e) {}
     }
   };
+});
+
+// ── Results history ─────────────────────────────────────────────────────────
+// Every result card shown (agents, live avatar, Business…) is kept on this device so it can be
+// opened again. Agent status cards (Neural map / agents panel) are not results.
+function loadHistory(): ResultHistoryEntry[] {
+  try { return parseHistory(localStorage.getItem(HISTORY_STORAGE_KEY)); } catch { return []; }
+}
+
+function saveHistory(list: ResultHistoryEntry[]) {
+  let kept = list;
+  for (;;) {
+    try {
+      if (kept.length) localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(kept));
+      else localStorage.removeItem(HISTORY_STORAGE_KEY);
+      return;
+    } catch {
+      // Over quota (or storage blocked): keep the newer half and try again.
+      if (kept.length <= 1) return;
+      kept = kept.slice(0, Math.ceil(kept.length / 2));
+    }
+  }
+}
+
+const isAgentStatusCard = (result: string) => /^\*\*Status:\*\* /.test(result);
+
+useStore.subscribe((state, prev) => {
+  const outcome = state.agentOutcome;
+  if (outcome && outcome !== prev.agentOutcome && !outcome.fromHistory && !isAgentStatusCard(outcome.result)) {
+    useStore.setState({ resultHistory: addToHistory(state.resultHistory, outcome) });
+    return; // the setState above runs this again with the new list, which saves it
+  }
+  if (state.resultHistory !== prev.resultHistory) saveHistory(state.resultHistory);
 });

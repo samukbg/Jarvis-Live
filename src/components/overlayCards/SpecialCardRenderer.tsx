@@ -124,7 +124,9 @@ export const SpecialCardRenderer: React.FC<{
   );
 };
 
-const LABELS: Record<string, { label: string; color: string }> = {
+/** Each card type's name and colour (the card header, the results history). */
+// eslint-disable-next-line react-refresh/only-export-components
+export const LABELS: Record<string, { label: string; color: string }> = {
   weather: { label: 'Weather', color: '#60A5FA' },
   finance: { label: 'Market', color: '#34D399' },
   flight: { label: 'Flight', color: '#38BDF8' },

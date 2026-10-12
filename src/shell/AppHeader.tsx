@@ -1,12 +1,38 @@
 // The app header (mobile AppHeader): wordmark + live status, screen switch, the agent/model
 // picker, the Gemini Live switch, language and settings — one glass bar.
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronDown, Orbit, Settings, Waypoints } from 'lucide-react';
+import { Check, ChevronDown, History, Orbit, Settings, Waypoints } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { IconButton, Pressable, SegmentedControl, StatusDot, Switch, alpha, palette, spring } from '../ui';
 import { providerFor, providersFor, useVoiceStatus } from './status';
+
+/** Opens the results history; a small count once there are entries. */
+function HistoryButton() {
+  const count = useStore((s) => s.resultHistory.length);
+  return (
+    <div className="relative shrink-0">
+      <IconButton icon={History} label="Results history" size={44} className="max-sm:!h-10 max-sm:!w-10" onClick={() => useStore.getState().setHistoryOpen(true)} />
+      <AnimatePresence>
+        {count > 0 && (
+          <motion.span
+            key="badge"
+            aria-hidden
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0, opacity: 0 }}
+            transition={spring.bouncy}
+            className="pointer-events-none absolute -right-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full px-1 text-[10px] font-bold leading-none tabular"
+            style={{ background: palette.accent, color: palette.textInverse, boxShadow: `0 0 0 2px ${palette.surface}` }}
+          >
+            {count > 99 ? '99+' : count}
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 function ModelPicker() {
   const installedAgents = useStore((s) => s.installedAgents);
@@ -160,7 +186,8 @@ export function AppHeader() {
           <div className="relative">
             <LanguageSelector value={language} onChange={setLanguage} disabled={isTtsLoading} />
           </div>
-          <IconButton icon={Settings} label="Settings" size={44} onClick={() => useStore.getState().setSettingsOpen(true)} />
+          <HistoryButton />
+          <IconButton icon={Settings} label="Settings" size={44} className="shrink-0 max-sm:!h-10 max-sm:!w-10" onClick={() => useStore.getState().setSettingsOpen(true)} />
         </div>
       </div>
     </header>

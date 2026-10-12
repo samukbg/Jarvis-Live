@@ -1,12 +1,13 @@
 // An agent's result, in a sheet (mobile AgentOutcomeModal): domain cards (weather, finance,
 // flights…) when the content is one, else source cards or formatted markdown.
 import { motion } from 'framer-motion';
-import { Check, ExternalLink, Sparkles } from 'lucide-react';
+import { Check, ExternalLink, History, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { useStore } from '../store';
 import { FormattedMarkdown, MediaRenderer } from '../components/FormattedMarkdown';
 import { detectSpecialContent } from '../components/overlayCards/detectSpecialContent';
 import { SpecialCardRenderer } from '../components/overlayCards/SpecialCardRenderer';
+import { dayLabel } from '../components/overlayCards/resultHistory';
 import { Pressable, Sheet, alpha, palette, spring } from '../ui';
 import { agentMeta } from './status';
 
@@ -151,6 +152,9 @@ function ResultCard({ item, index }: { item: ResultItem; index: number }) {
 export function ResultSheet() {
   const agentOutcome = useStore((s) => s.agentOutcome);
   const dismissOutcome = useStore((s) => s.dismissOutcome);
+  const hasHistory = useStore((s) => s.resultHistory.length > 0);
+  const showHistory = () => { dismissOutcome(); useStore.getState().setHistoryOpen(true); };
+  const shownAt = agentOutcome?.fromHistory && agentOutcome.shownAt ? agentOutcome.shownAt : null;
   const meta = agentOutcome ? agentMeta(agentOutcome.agentId) : null;
   const body = () => {
     if (!agentOutcome) return null;
@@ -171,12 +175,19 @@ export function ResultSheet() {
       open={!!agentOutcome}
       onClose={dismissOutcome}
       title={agentOutcome?.agentName ?? ''}
-      subtitle="Result"
+      subtitle={shownAt
+        ? <span className="inline-flex items-center gap-1"><History size={11} className="shrink-0" /> From history · {dayLabel(shownAt)}, {new Date(shownAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        : 'Result'}
       icon={meta?.icon ?? Sparkles}
       accent={meta?.color ?? palette.accent}
       width={980}
       footer={
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-3">
+          {hasHistory ? (
+            <Pressable onClick={showHistory} className="flex h-10 items-center gap-1.5 rounded-full px-3 t-subhead transition-colors hover:text-[#EAF6FF]" style={{ color: palette.textTertiary }} aria-label="Open the results history">
+              <History size={15} /> History
+            </Pressable>
+          ) : <span />}
           <Pressable onClick={dismissOutcome} className="flex h-10 items-center gap-2 rounded-full px-5 t-subhead" style={{ background: palette.accent, color: palette.textInverse }}>
             <Check size={16} strokeWidth={2.4} /> Done
           </Pressable>

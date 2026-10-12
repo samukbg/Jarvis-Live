@@ -7,6 +7,7 @@ import { Backdrop } from './shell/Backdrop';
 import { AppHeader } from './shell/AppHeader';
 import { Dock } from './shell/Dock';
 import { ResultSheet } from './shell/ResultSheet';
+import { HistorySheet } from './shell/HistorySheet';
 import { CommandScreen } from './screens/CommandScreen';
 import { NeuralScreen } from './screens/NeuralScreen';
 import { Pressable, alpha, palette, spring } from './ui';
@@ -93,6 +94,7 @@ function App() {
         </ErrorBoundary>
       </main>
       <Dock />
+      <HistorySheet />
       <ResultSheet />
       <SettingsOverlay />
     </div>
