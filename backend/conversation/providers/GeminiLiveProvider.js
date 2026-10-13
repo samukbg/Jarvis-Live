@@ -1,6 +1,7 @@
 import { Modality } from '@google/genai';
 import { PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from '../../device/phoneActions.js';
 import { BUSINESS_PROMPT, BUSINESS_TOOL } from '../../business/card.js';
+import { SHOW_CARD_PROMPT, SHOW_CARD_TOOL, showCard } from '../../cards/showCard.js';
 import { TranscriptBuffer } from '../transcript.js';
 import { acknowledgement } from '../acknowledge.js';
 
@@ -21,7 +22,9 @@ ALWAYS speak first: as you call it, tell the user in one short sentence, in thei
 
 ${PHONE_ACTION_PROMPT}
 
-${BUSINESS_PROMPT}`;
+${BUSINESS_PROMPT}
+
+${SHOW_CARD_PROMPT}`;
 }
 
 /** Google Search (answers in ~2 s) plus the agent (non-blocking: Gemini keeps talking while it works). */
@@ -38,7 +41,7 @@ export function liveTools(agent) {
           properties: { task: { type: 'STRING', description: 'The detailed task instruction to send to the agent' } },
           required: ['task'],
         },
-      }, PHONE_ACTION_TOOL, BUSINESS_TOOL],
+      }, PHONE_ACTION_TOOL, BUSINESS_TOOL, SHOW_CARD_TOOL],
     },
   ];
 }
@@ -55,6 +58,8 @@ export class GeminiLiveProvider {
     this.phoneBridge = options.phoneBridge;
     // Business Dashboard (business/service.js): show_business_dashboard opens the card.
     this.business = options.business || null;
+    // show_card (cards/showCard.js): a live card from the answer's facts.
+    this.showCard = options.showCard || showCard;
     this.speak = options.speak;
     
     this.session = null;
@@ -210,6 +215,22 @@ export class GeminiLiveProvider {
                 } catch (e) {
                   this.broadcastLog(`[GEMINI ERROR] Business dashboard response failed: ${e.message}`);
                 }
+              } else if (fc && fc.name === SHOW_CARD_TOOL.name) {
+                // The card opens on the device talking (forSpeaker origin); Gemini speaks the answer.
+                const session = this.session;
+                (async () => {
+                  let result;
+                  try {
+                    result = (await this.showCard(fc.args || {}, { broadcast: this.broadcast })).result;
+                  } catch (e) {
+                    result = `The card could not be shown (${e.message}). Tell the user the answer in words.`;
+                  }
+                  try {
+                    session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] });
+                  } catch (e) {
+                    this.broadcastLog(`[GEMINI ERROR] Card response failed: ${e.message}`);
+                  }
+                })();
               } else if (fc && fc.name === `delegate_to_${this.targetAgent}`) {
                 const task = fc.args.task;
                 // Non-blocking: Gemini goes on talking ("I'm on it…") while the agent works. The

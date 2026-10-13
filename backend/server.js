@@ -33,6 +33,7 @@ import { WorkerRegistry } from './hermes/WorkerRegistry.js';
 import { CapabilityRegistry } from './hermes/CapabilityRegistry.js';
 import { ConversationRuntime } from './conversation/ConversationRuntime.js';
 import { registerCardRoutes } from './cards/index.js';
+import { SHOW_CARD_TOOL, SHOW_CARD_PROMPT } from './cards/showCard.js';
 import { createBusinessService } from './business/service.js';
 import { registerBusinessRoutes } from './business/routes.js';
 import { BUSINESS_PROMPT, BUSINESS_TOOL } from './business/card.js';
@@ -731,7 +732,10 @@ app.get('/api/device/tool', (req, res) => {
   res.json({
     tool: PHONE_ACTION_TOOL,
     prompt: PHONE_ACTION_PROMPT,
-    tools: [{ tool: BUSINESS_TOOL, prompt: BUSINESS_PROMPT, path: '/api/business/show' }],
+    tools: [
+      { tool: BUSINESS_TOOL, prompt: BUSINESS_PROMPT, path: '/api/business/show' },
+      { tool: SHOW_CARD_TOOL, prompt: SHOW_CARD_PROMPT, path: '/api/cards/show' },
+    ],
   });
 });
 
@@ -2433,7 +2437,7 @@ app.get('/api/spotify/state', async (req, res) => {
 });
 
 // ── Rich result cards: real data behind them ─────────────────────────────────
-registerCardRoutes(app);
+registerCardRoutes(app, { broadcast: (msg) => broadcast(msg) });
 // Whoever holds this server's API_KEY is its owner (no Jarvis Cloud tokens here).
 registerBusinessRoutes(app, {
   service: businessService,

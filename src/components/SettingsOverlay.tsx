@@ -1,18 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useStore, API_KEY, DEFAULT_AVATAR } from '../store';
-import { Settings as SettingsIcon, Plus, Trash2 } from 'lucide-react';
+import { Settings as SettingsIcon } from 'lucide-react';
 import { Pressable, Sheet, alpha, palette } from '../ui';
 import { CreateAvatarModal } from './CreateAvatarModal';
+import { AvatarPicker } from './AvatarPicker';
 import { Section } from './SettingsSection';
 import { AvatarServerSection } from './ComputerSettings';
 import { BusinessSettings } from './BusinessSettings';
-
-const AVATAR_OPTIONS = [
-  'maria', 'ben', 'kate', 'john', 'oliver', 'clara', 'ming', 
-  'elena', 'jack', 'may', 'arnold', 'camila', 'caroline', 
-  'gordon', 'marcus', 'mozart', 'trevor'
-];
-
 
 export const SettingsOverlay: React.FC = () => {
   const { 
@@ -154,31 +148,17 @@ export const SettingsOverlay: React.FC = () => {
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="t-subhead" style={{ color: palette.textSecondary }}>Live avatar</span>
-                <Pressable onClick={() => setShowCreateModal(true)} className="flex items-center gap-1 rounded-full px-3 py-1 t-subhead" style={{ background: alpha(palette.accent, 36), color: palette.accent }}>
-                  <Plus size={14} /> New avatar
-                </Pressable>
+                <span className="t-footnote" style={{ color: palette.textTertiary }}>{avatarOptions.length || 1} available</span>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {(avatarOptions.length ? avatarOptions : [localAvatarId]).map(av => {
-                  const job = avatarTrainingJobs?.[av];
-                  const isGenerating = job && job.status === 'training';
-                  const isBuiltin = AVATAR_OPTIONS.includes(av.toLowerCase());
-                  const c = chip(localAvatarId === av, isGenerating ? palette.warning : palette.accent);
-                  return (
-                    <button key={av} type="button" disabled={isGenerating} onClick={() => { if (!isGenerating) setLocalAvatarId(av); }}
-                      className={`${c.className} ${isGenerating ? 'opacity-60' : ''}`} style={c.style}>
-                      <span>{av}</span>
-                      {isGenerating && <span className="t-caption" style={{ color: palette.warning }}>{job.progress}%</span>}
-                      {!isBuiltin && !isGenerating && (
-                        <span role="button" title={`Delete custom avatar "${av}"`} onClick={(e) => { e.stopPropagation(); handleDeleteCustomAvatar(av); }}
-                          className="rounded-full p-0.5 hover:bg-[rgba(239,68,68,0.2)] hover:text-[#EF4444]">
-                          <Trash2 size={12} />
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+              <AvatarPicker
+                avatars={avatarOptions.length ? avatarOptions : [localAvatarId]}
+                selected={localAvatarId}
+                serverUrl={activeServerUrl || ''}
+                trainingJobs={avatarTrainingJobs}
+                onSelect={setLocalAvatarId}
+                onCreate={() => setShowCreateModal(true)}
+                onDelete={handleDeleteCustomAvatar}
+              />
             </div>
           </Section>
 

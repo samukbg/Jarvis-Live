@@ -127,10 +127,23 @@ export function plausibleTemp(stated, patch) {
   return stated >= lo - 4 && stated <= hi + 4;
 }
 
+const GEO_LANGUAGES = ['pt', 'es', 'fr', 'de', 'it'];
+const geoSearch = (city, language) => cached(`geo:${language}:${norm(city)}`, 24 * 3600e3, () =>
+  getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=8&language=${language}&format=json`))
+  .then((res) => res?.results ?? [])
+  .catch(() => []);
+
 async function geocode(city, country) {
-  const res = await cached(`geo:${norm(city)}`, 24 * 3600e3, () =>
-    getJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=8&language=en&format=json`));
-  const list = res?.results ?? [];
+  let list = await geoSearch(city, 'en');
+  // A city in its own language ("Lisboa", "Wien") finds only villages in English: when the best
+  // match is not a real town, the other languages' matches count too, the biggest first.
+  if (!(list[0]?.population >= 10_000)) {
+    const more = (await Promise.all(GEO_LANGUAGES.map((l) => geoSearch(city, l)))).flat();
+    const seen = new Set();
+    list = [...list, ...more]
+      .filter((r) => !seen.has(r.id) && seen.add(r.id))
+      .sort((a, b) => (b.population || 0) - (a.population || 0));
+  }
   if (!list.length) return null;
   if (country) {
     const want = norm(country);

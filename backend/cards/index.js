@@ -12,6 +12,9 @@ import { enrichRecipe } from './extras.js';
 // GENERATED from src/components/overlayCards/detectSpecialContent.ts (npm run build:detect).
 import { detectSpecialContent } from './detect.generated.js';
 import { mergeCard } from './merge.js';
+import { showCard } from './showCard.js';
+
+const ORIGINS = ['iphone', 'android', 'watch', 'web'];
 
 const ENRICHERS = {
   weather: enrichWeather,
@@ -31,7 +34,8 @@ export async function enrichCard(type, data) {
   return result ? { ...result, fetchedAt: Date.now() } : null;
 }
 
-export function registerCardRoutes(app) {
+/** `broadcast` sends to the apps; `avatarOrigin()` → the device that started the live avatar. */
+export function registerCardRoutes(app, { broadcast = () => {}, avatarOrigin = () => undefined } = {}) {
   app.post('/api/cards/enrich', async (req, res) => {
     const { type, data } = req.body ?? {};
     try {
@@ -53,6 +57,19 @@ export function registerCardRoutes(app) {
       res.json({ card: { type: detected.type, data: mergeCard(detected.data, enrichment), sources: enrichment?.sources ?? [] } });
     } catch (e) {
       res.json({ card: { type: detected.type, data: detected.data, sources: [] } });
+    }
+  });
+
+  // The voice models' show_card tool (cards/showCard.js): the live avatar posts its arguments
+  // here ({ ..., via: 'avatar' }); `result` is what it says.
+  app.post('/api/cards/show', async (req, res) => {
+    const b = req.body || {};
+    const origin = b.via === 'avatar' ? avatarOrigin() : ORIGINS.includes(b.origin) ? b.origin : undefined;
+    try {
+      const { shown, type, result } = await showCard(b, { broadcast, origin });
+      res.json({ ok: true, shown, type, result });
+    } catch (e) {
+      res.json({ ok: false, shown: false, result: `The card could not be shown (${e.message}). Tell the user the answer in words.` });
     }
   });
 
