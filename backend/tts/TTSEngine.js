@@ -3,6 +3,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { synthesizeWithSystemVoice, wavTiming } from './systemVoice.js';
+import { spokenText } from './spokenText.js';
+import { isEchoOf } from './echo.js';
 
 
 export class TTSEngine {
@@ -22,6 +24,7 @@ export class TTSEngine {
     this.fetchImpl = options.fetchImpl || ((...args) => fetch(...args));
     this.synthesizeSystemVoice = options.synthesizeSystemVoice || synthesizeWithSystemVoice;
     this.ttsServerDownUntil = 0;
+    this.recentSpeech = []; // { text, at }: what was said lately, to recognise it heard back
   }
 
   /**
@@ -217,6 +220,12 @@ export class TTSEngine {
     this.onStateChange();
   }
 
+  /** Whether `text` (just recognised) is what Jarvis is saying or just said, heard back. */
+  isEcho(text) {
+    const speaking = this.isPlayingAudio || this.audioFilesQueue.length > 0 || Date.now() - this.lastSpeechEndTime < 1200;
+    return speaking && isEchoOf(text, this.recentSpeech.map((s) => s.text));
+  }
+
   speak(speechText, activeLanguage, geminiLiveMode, activeModel, options = { interrupt: true }) {
     if (!speechText) return;
     if (geminiLiveMode && !options.force) {
@@ -227,6 +236,9 @@ export class TTSEngine {
     if (options.interrupt) {
       this.stopSpeaking();
     }
+    speechText = spokenText(speechText, activeLanguage);
+    const now = Date.now();
+    this.recentSpeech = [...this.recentSpeech.filter((s) => now - s.at < 30_000), { text: speechText, at: now }];
   
     console.log(`[TTS] Queued sentence: "${speechText.substring(0, 60)}"`);
     this.speechQueue.push(speechText);

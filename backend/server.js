@@ -33,7 +33,9 @@ import { WorkerRegistry } from './hermes/WorkerRegistry.js';
 import { CapabilityRegistry } from './hermes/CapabilityRegistry.js';
 import { ConversationRuntime } from './conversation/ConversationRuntime.js';
 import { registerCardRoutes } from './cards/index.js';
-import { SHOW_CARD_TOOL, SHOW_CARD_PROMPT } from './cards/showCard.js';
+import { SHOW_CARD_TOOL, SHOW_CARD_PROMPT, cardText } from './cards/showCard.js';
+import { detectSpecialContent } from './cards/detect.generated.js';
+import { stripWakeWord, wakeReply } from './conversation/wakeWord.js';
 import { createBusinessService } from './business/service.js';
 import { registerBusinessRoutes } from './business/routes.js';
 import { BUSINESS_PROMPT, BUSINESS_TOOL } from './business/card.js';
@@ -1192,8 +1194,18 @@ function handleClientMessage(ws, message, isBinary) {
         sttProxy.setLanguage(activeLanguage);
       }
       if (data.type === 'command') {
-        cancelActiveCommands();
         const text = data.payload || data.text;
+        // The phone can send what was just said twice (mic stopped by hand as recognition ended):
+        // once as voice_command, once as a command. Run it once.
+        const now = Date.now();
+        const cleanText = String(text || '').trim().toLowerCase();
+        if (cleanText && cleanText === lastVoiceCommandText && now - lastVoiceCommandTime < 2500) {
+          console.log(`[CMD] Suppressed duplicate of the last request within 2.5s: "${cleanText.slice(0, 60)}"`);
+          return;
+        }
+        lastVoiceCommandTime = now;
+        lastVoiceCommandText = cleanText;
+        cancelActiveCommands();
         handleOrchestration(text, 'text');
       }
       // voice_command: accurate transcription from browser WebSpeech API (primary path)
@@ -1204,7 +1216,7 @@ function handleClientMessage(ws, message, isBinary) {
         } else {
           const now = Date.now();
           const cleanText = data.text?.trim().toLowerCase();
-          if (ttsEngine?.isPlayingAudio || (now - (ttsEngine?.lastSpeechEndTime || 0) < 1200)) {
+          if (ttsEngine?.isEcho(data.text)) {
             console.log(`[VOICE_CMD] Suppressed acoustic echo while speaking: "${cleanText}"`);
             return;
           }
@@ -1773,6 +1785,17 @@ async function executeOrchestration(command, source = 'text') {
     if (words.length === 1 && FILLERS.has(words[0])) return;
   }
 
+  // "Jarvis" alone: answer right away, no agent run. "Jarvis, <request>": the request.
+  const wake = stripWakeWord(command);
+  if (wake.called && !wake.rest) {
+    const reply = wakeReply(activeLanguage);
+    broadcastLog(`JARVIS: ${reply}`);
+    broadcast({ type: 'voice_transcript', text: reply, role: 'assistant', is_final: true });
+    speak(reply);
+    return reply;
+  }
+  if (wake.called) command = wake.rest;
+
   isOrchestrating = true;
   broadcastAgentStatus('jarvis', 'THINKING');
   broadcastAgentStatus(activeModel, 'THINKING');
@@ -1790,7 +1813,7 @@ async function executeOrchestration(command, source = 'text') {
     // Jarvis handles it directly
     let styleInstruction = "Keep your response conversational and natural.";
       if (source.startsWith('voice')) {
-        styleInstruction = "The user spoke this via voice, and your response will be read aloud by Text-To-Speech. Keep your response brief, conversational, and completely free of markdown formatting (no asterisks, no bullet points). Use natural spoken English.";
+        styleInstruction = "The user spoke this via voice, and your response will be read aloud by Text-To-Speech. Keep your response brief, conversational, and completely free of markdown formatting (no asterisks, no bullet points). Use natural spoken English. Write figures with their symbols (12°C, 54°F, $1,234, 5%) and name the place for weather (\"In Paris, tomorrow…\") — the answer also opens a card on the user's screen.";
       }
       
       const sysPrompt = `System instructions: You are JARVIS, an advanced AI assistant. Answer the user directly. ${styleInstruction}
@@ -1927,10 +1950,17 @@ User: ${command}`;
           const actionOnly = isActionOnlyCommand(command);
           const hasArtifact = /\.(glb|gltf|obj|stl|fbx)(\?|$|\s|\))/i.test(cleanOut) || cleanOut.includes('/api/local-image') || cleanOut.includes('```');
           const isDelegated = didPerformTask || hasArtifact;
+          // A weather / finance / sports… answer opens its card, as in Gemini Live (show_card):
+          // the card goes as a JSON block, so every app version draws it the same way.
+          const card = !actionOnly && !hasArtifact ? detectSpecialContent(cleanOut) : null;
 
           if (actionOnly) {
             // Broadcast a lightweight action event (no overlay triggered)
             broadcast({ type: 'agent_action', agentId: 'jarvis', agentName: activeModel.toUpperCase(), result: cleanOut });
+          } else if (card) {
+            broadcastLog(`JARVIS: ${cleanOut.replace(/\s*\n+\s*/g, ' ')}`);
+            broadcast({ type: 'agent_result', agentId: 'jarvis', agentName: activeModel.toUpperCase(), result: cardText(card.type, cleanOut, card.data), isDelegated: true });
+            broadcast({ type: 'voice_transcript', text: cleanOut, role: 'assistant', is_final: true });
           } else if (isDelegated) {
             // Delegated execution task — show the overlay with rich UI cards
             broadcast({ type: 'agent_result', agentId: 'jarvis', agentName: activeModel.toUpperCase(), result: cleanOut, isDelegated: true });

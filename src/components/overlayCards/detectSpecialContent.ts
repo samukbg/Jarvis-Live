@@ -224,24 +224,31 @@ function currentCondition(text: string) {
   return best;
 }
 
-function detectWeather(text: string): Detected | undefined {
-  if (!WEATHER_WORDS.test(text)) return undefined;
+/** Spoken answers spell the unit out ("12 degrees Celsius", "7 graus Celsius"): read them as 12°C. */
+const SPELLED_TEMP = /(-?\d+(?:\.\d+)?)\s*(?:degrees?|degr[ée]s|graus|grados|gradi|grad)\s+(celsius|centigrade|fahrenheit)(?![\p{L}])/giu;
+
+function detectWeather(rawText: string): Detected | undefined {
+  const text = rawText.replace(SPELLED_TEMP, (_m, n: string, unit: string) => `${n}°${/^f/i.test(unit) ? 'F' : 'C'}`);
   const t = text.match(/(-?\d+(?:\.\d+)?)\s*°\s*([CF])?\b/i);
   if (!t) return undefined;
+  // A temperature with a weather word, or with a sky condition ("sunny, high of 12°C").
+  if (!WEATHER_WORDS.test(text) && !currentCondition(text)) return undefined;
 
   const cityM = text.match(/\b(?:weather|forecast)\s+(?:in|for)\s+([\p{L}][\p{L}' -]*?)(?=\s+(?:today|tomorrow|is|right now|currently|this)\b|\s*[:\n.,]|$)/iu);
   // Spoken answers: "Right now in Paris, it's…" / "In New York, the temperature…" /
   // "à Paris, les températures…" / "em Lisboa, a temperatura…" / "en Madrid, …".
   const spokenCityM = cityM
     ? null
-    : text.match(/\b(?:[Rr]ight now |[Cc]urrently |[Tt]oday )?[Ii]n\s+(\p{Lu}[\p{L}'-]+(?:\s+\p{Lu}[\p{L}'-]+)*)\s*,\s*(?:it|the|there|expect)\b/u) ??
+    : text.match(/\b(?:[Rr]ight now |[Cc]urrently |[Tt]oday )?[Ii]n\s+(\p{Lu}[\p{L}'-]+(?:\s+\p{Lu}[\p{L}'-]+)*)(?:\s+(?:right now|currently|today|tomorrow|tonight))?\s*,\s*(?:it|the|there|expect|tomorrow|today|tonight|this)\b/u) ??
       text.match(/(?<![\p{L}])(?:[àÀ]|[Ee][mn]|[Nn][oa])\s+(\p{Lu}[\p{L}'-]+(?:[ -]\p{Lu}[\p{L}'-]+)*)\s*,/u);
   const cityRaw = cityM?.[1] ?? spokenCityM?.[1];
   const city = cityRaw && /^\p{Lu}/u.test(cityRaw) ? cityRaw.trim() : undefined;
   const cond = currentCondition(text);
   // High/low belong to the day their sentence talks about ("Tomorrow's forecast: high of 21°").
-  const highRe = /(?:high|m[aá]x(?:imum|imale?s?|ima)?)(?:\s+(?:of|de))?\s*:?\s*(-?\d+(?:\.\d+)?)\s*°/iu;
-  const lowRe = /(?:low|m[ií]n(?:imum|imale?s?|ima)?)(?:\s+(?:of|de))?\s*:?\s*(-?\d+(?:\.\d+)?)\s*°/iu;
+  // "high of 21°", "high of around 21°", "a low near 7°", "máxima de cerca de 20°".
+  const about = '(?:\\s+(?:around|about|near|roughly|approximately|environ|cerca de|aproximadamente|circa))?';
+  const highRe = new RegExp(`(?:high|m[aá]x(?:imum|imale?s?|ima)?)(?:\\s+(?:of|de))?${about}\\s*:?\\s*(-?\\d+(?:\\.\\d+)?)\\s*°`, 'iu');
+  const lowRe = new RegExp(`(?:low|m[ií]n(?:imum|imale?s?|ima)?)(?:\\s+(?:of|de))?${about}\\s*:?\\s*(-?\\d+(?:\\.\\d+)?)\\s*°`, 'iu');
   const sentences = text.split(/(?<=[.!?])\s+|\n+/);
   let high: number | undefined;
   let low: number | undefined;
