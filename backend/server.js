@@ -1079,6 +1079,19 @@ function stopSpeaking() {
   ttsEngine.stopSpeaking();
 }
 
+// Mic audio with Gemini Live off and no speech recognizer (a Jarvis Server on a user's computer
+// has no RealtimeSTT): say so, once per mic turn, instead of staying silent.
+let noSpeechRecognizerSaid = false;
+const NO_SPEECH_RECOGNIZER = "Gemini Live is off, and this computer can't understand speech without it. Type your request, or turn Gemini Live on.";
+function sayNoSpeechRecognizer() {
+  if (noSpeechRecognizerSaid) return;
+  noSpeechRecognizerSaid = true;
+  console.log('[VOICE] Mic audio with Gemini Live off and no speech recognizer (RealtimeSTT) — told the user');
+  broadcast({ type: 'voice_transcript', text: NO_SPEECH_RECOGNIZER, role: 'assistant', is_final: true });
+  broadcastNotification({ label: 'VOICE', msg: NO_SPEECH_RECOGNIZER, kind: 'warn' });
+  speak(NO_SPEECH_RECOGNIZER);
+}
+
 function speak(speechText, options = { interrupt: true }) {
   ttsEngine.speak(speechText, activeLanguage, geminiLiveMode, activeModel, options);
 }
@@ -1121,10 +1134,15 @@ function handleClientMessage(ws, message, isBinary) {
           }
         });
       } catch(e) {}
-    } else if (sttProxy.ws && sttProxy.ws.readyState === WebSocket.OPEN) {
-      try {
-        sttProxy.ws.send(payload);
-      } catch(e) {}
+    } else {
+      // Gemini Live off: the mic audio goes to RealtimeSTT (STT_URL) for the agents. (This read
+      // `sttProxy.ws`, which never existed: the audio was dropped even with RealtimeSTT running.)
+      const stt = sttProxy.getSocket();
+      if (stt && stt.readyState === WebSocket.OPEN) {
+        try { stt.send(payload); } catch(e) {}
+      } else {
+        sayNoSpeechRecognizer();
+      }
     }
     return;
   } else {
@@ -1202,6 +1220,7 @@ function handleClientMessage(ws, message, isBinary) {
       }
       if (data.type === 'mic_toggle') {
         if (data.active) voiceOwner = ws;
+        if (data.active) noSpeechRecognizerSaid = false;
         micActive = data.active;
         sttProxy.setMicActive(data.active);
         syncGeminiLiveState();
