@@ -54,6 +54,7 @@ Most "AI assistants" are a chat box. Jarvis Live is an **AI operating layer for 
 
 ### Voice
 - **Gemini Live native audio**: sub-second, speech-to-speech conversation with natural voices.
+- **Or OpenAI Realtime** (`gpt-realtime-2.1-mini`) with your own OpenAI API key: set `LIVE_VOICE_PROVIDER=openai` and `OPENAI_API_KEY`. Same tools (agents, phone actions, cards), plus a web-search tool.
 - **Barge-in**: talk over Jarvis and it yields, like a real conversation.
 - **Wake word** ("Hi Jarvis", "Wake up") through a local [RealtimeSTT](https://github.com/KoljaB/RealtimeSTT) server.
 - **Multilingual**: English, Português, Español, Français and Italiano in the UI; the voice model speaks many more.
@@ -243,6 +244,7 @@ Everything lives in `.env` (see [`.env.example`](.env.example)); every setting i
 | :-- | :-- |
 | `API_KEY` | Key every client must send. If unset, a random one is generated and printed at startup |
 | `GEMINI_API_KEY` | Gemini Live voice and the avatar's conversation engine |
+| `LIVE_VOICE_PROVIDER`, `OPENAI_API_KEY` | `openai` + your OpenAI key: the orb's live voice through OpenAI Realtime instead of Gemini Live (`OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE` optional) |
 | `OLLAMA_SERVERS` | Comma-separated Ollama URLs (default `http://localhost:11434`) |
 | `STREAMER_URL` | Live-avatar streamer (default: this machine) |
 | `STT_URL` | RealtimeSTT server (default `ws://localhost:8001`) |

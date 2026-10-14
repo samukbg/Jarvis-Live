@@ -5,17 +5,20 @@ import { SHOW_CARD_PROMPT, SHOW_CARD_TOOL, showCard } from '../../cards/showCard
 import { TranscriptBuffer } from '../transcript.js';
 import { acknowledgement } from '../acknowledge.js';
 
-const AGENT_LABELS = { agy: 'Antigravity', gemini: 'Antigravity', claude: 'Claude', hermes: 'Hermes', codex: 'Codex' };
+export const AGENT_LABELS = { agy: 'Antigravity', gemini: 'Antigravity', claude: 'Claude', hermes: 'Hermes', codex: 'Codex' };
 // How long Gemini gets to speak its own acknowledgement before Jarvis writes one.
 export const ACK_GRACE_MS = 2500;
 
-/** The Live session's rules: search answers itself, computer tasks go to the agent — said out loud first. */
-export function liveInstruction(agent) {
+/**
+ * The Live session's rules: search answers itself, computer tasks go to the agent — said out loud
+ * first. `search`: how this voice searches (Gemini's Google Search; a tool for the others).
+ */
+export function liveInstruction(agent, { search = 'use Google Search' } = {}) {
   const tool = `delegate_to_${agent}`;
   const name = AGENT_LABELS[agent] || agent.toUpperCase();
   return `You are Jarvis, a concise and helpful AI assistant. Respond naturally and briefly, in the language the user speaks.
 
-Questions a web search can answer (weather, news, events, opening hours, prices, sports, facts, places): use Google Search and answer yourself, right away. Do not delegate them.
+Questions a web search can answer (weather, news, events, opening hours, prices, sports, facts, places): ${search} and answer yourself, right away. Do not delegate them.
 
 Tasks that need the user's computer (open or control apps such as Spotify, files, folders, scripts, downloads, coding, creating apps, browsing websites, long multi-step research): never say you cannot do it — call the \`${tool}\` tool. It runs in the background on the user's computer with the ${name} agent.
 ALWAYS speak first: as you call it, tell the user in one short sentence, in their language, that you are on it (e.g. "I'm on it, I'm asking ${name}." / "Je m'en occupe, je demande à ${name}." / "Estou nisso, vou pedir ao ${name}."). Never stay silent and never say the task is done before its result comes back. When the result comes back, tell the user what it says, briefly and naturally.
@@ -306,6 +309,11 @@ export class GeminiLiveProvider {
       console.error('[GEMINI LIVE] Failed to send tool response:', e);
       this.broadcastLog(`[GEMINI ERROR] Tool Response Failed: ${e.message}`);
     }
+  }
+
+  /** A camera / screen frame (base64): Gemini sees what the user shows. */
+  sendImage(mimeType, data) {
+    this.session?.sendRealtimeInput({ video: { mimeType: mimeType || 'image/jpeg', data } });
   }
 
   disconnect() {

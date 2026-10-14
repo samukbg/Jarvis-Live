@@ -40,6 +40,7 @@ import { createBusinessService } from './business/service.js';
 import { registerBusinessRoutes } from './business/routes.js';
 import { BUSINESS_PROMPT, BUSINESS_TOOL } from './business/card.js';
 import { GeminiLiveProvider } from './conversation/providers/GeminiLiveProvider.js';
+import { OpenAIRealtimeProvider } from './conversation/providers/OpenAIRealtimeProvider.js';
 import { PhoneBridge, PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from './device/phoneActions.js';
 import { isAuthorized, requestKey } from './shared/auth.js';
 import { callbackUrl, createAvatarSource, lanAddress } from './avatar/avatarSource.js';
@@ -984,9 +985,9 @@ function routeVisionFrame(mimeType, data, reqHost = '') {
     }, reqHost).catch((e) => console.error('[VISION] Avatar streamer frame error:', e.message));
     return;
   }
-  if (geminiLiveMode && geminiLiveProvider.session) {
+  if (geminiLiveMode && liveVoice().session) {
     try {
-      geminiLiveProvider.session.sendRealtimeInput({ video: { mimeType: mimeType || 'image/jpeg', data } });
+      liveVoice().sendImage(mimeType, data);
     } catch (e) {
       console.error('[GEMINI LIVE] Vision frame send error:', e.message);
     }
@@ -1127,7 +1128,10 @@ function handleClientMessage(ws, message, isBinary) {
       }
     }
 
-    if (geminiLiveMode && geminiLiveProvider.session) {
+    if (geminiLiveMode && useOpenAIVoice()) {
+      // OpenAI Realtime: held while the session (re)connects, then sent.
+      openaiRealtimeProvider.sendAudio(payload);
+    } else if (geminiLiveMode && geminiLiveProvider.session) {
       try {
         geminiLiveProvider.session.sendRealtimeInput({
           audio: {
@@ -1658,8 +1662,7 @@ const conversationRuntime = new ConversationRuntime({
 // (business/). Created here, after broadcast's clients exist.
 const businessService = createBusinessService({ dataDir: DATA_DIR, broadcast, log: (line) => { console.log(line); broadcastLog(line); } });
 
-const geminiLiveProvider = new GeminiLiveProvider({
-  createClient: createGeminiClient,
+const liveVoiceOptions = {
   phoneBridge,
   business: businessService,
   broadcast,
@@ -1682,7 +1685,14 @@ const geminiLiveProvider = new GeminiLiveProvider({
     }
   },
   speak: speak
-});
+};
+const geminiLiveProvider = new GeminiLiveProvider({ ...liveVoiceOptions, createClient: createGeminiClient });
+// The second live voice: OpenAI Realtime (gpt-realtime-2.1-mini) with your own OpenAI key —
+// LIVE_VOICE_PROVIDER=openai and OPENAI_API_KEY in .env.
+const openaiRealtimeProvider = new OpenAIRealtimeProvider(liveVoiceOptions);
+/** OpenAI Realtime when chosen and its key is set, else Gemini Live. */
+const useOpenAIVoice = () => process.env.LIVE_VOICE_PROVIDER === 'openai' && !!process.env.OPENAI_API_KEY;
+const liveVoice = () => (useOpenAIVoice() ? openaiRealtimeProvider : geminiLiveProvider);
 function handleGeminiCommand(command, source = 'text') {
   return agyWorker.handleCommand(command, source);
 }
@@ -2632,10 +2642,12 @@ app.post('/api/action/:name', async (req, res) => {
 async function syncGeminiLiveState() {
   const shouldConnect = geminiLiveMode;
   
+  const voice = liveVoice();
+  (voice === geminiLiveProvider ? openaiRealtimeProvider : geminiLiveProvider).disconnect();
   if (shouldConnect) {
-    geminiLiveProvider.connect(activeModel);
+    voice.connect(activeModel);
   } else {
-    geminiLiveProvider.disconnect();
+    voice.disconnect();
   }
 }
 
