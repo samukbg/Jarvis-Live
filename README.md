@@ -248,6 +248,7 @@ Everything lives in `.env` (see [`.env.example`](.env.example)); every setting i
 | `OLLAMA_SERVERS` | Comma-separated Ollama URLs (default `http://localhost:11434`) |
 | `STREAMER_URL` | Live-avatar streamer (default: this machine) |
 | `STT_URL` | RealtimeSTT server (default `ws://localhost:8001`) |
+| `TTS_SYSTEM_VOICE` | The computer voice that reads answers with Gemini Live off, per language (`en=Moira;pt=Joana`; default: a woman's voice, Samantha on macOS) |
 | `HF_TOKEN` | Hugging Face token for the gated AVTR-1 weights and portraits |
 | `CRYPTO_WALLET`, `NEWS_RSS_URLS` | Optional wallet and news cards; also editable in Settings |
 
