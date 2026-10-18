@@ -2319,7 +2319,13 @@ app.post('/api/settings', (req, res) => {
     if (ttsServer !== undefined) {
       global.TTS_SERVER = ttsServer; // Exported to TTSEngine.js
     }
-    if (cryptoWallet !== undefined) CRYPTO_WALLET = cryptoWallet.trim();
+    if (cryptoWallet !== undefined && cryptoWallet.trim() !== CRYPTO_WALLET) {
+      CRYPTO_WALLET = cryptoWallet.trim();
+      // The wallet card follows at once (cleared: back to its empty state) instead of in 30 s.
+      cachedCrypto = null;
+      if (!CRYPTO_WALLET) broadcast({ type: 'crypto', data: null });
+      refreshCrypto();
+    }
     if (newsRssUrl !== undefined) RSS_FEEDS = parseFeeds(newsRssUrl);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
