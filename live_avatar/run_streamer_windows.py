@@ -20,6 +20,13 @@ from avaturn_live_streamer.wsl_distro import wsl_distro  # noqa: E402
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(LIVE_AVATAR_DIR / ".env")
 
+def _ipv4s(out: str) -> list[str]:
+    """The IPv4 addresses in `hostname -I` output. When WSL fails, wsl.exe prints its error in
+    UTF-16 (null characters) instead, which crashed the streamer as an environment value."""
+    import re
+    return re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", (out or "").replace("\x00", ""))
+
+
 def get_wsl_renderer_url() -> str:
     import subprocess, httpx
     if os.environ.get("RENDERER_URL"):
@@ -27,7 +34,7 @@ def get_wsl_renderer_url() -> str:
     
     try:
         res = subprocess.run(["wsl.exe", "-d", wsl_distro(), "-e", "hostname", "-I"], capture_output=True, text=True, timeout=3)
-        for ip in res.stdout.strip().split():
+        for ip in _ipv4s(res.stdout):
             url = f"http://{ip}:8000"
             try:
                 if httpx.get(f"{url}/avatars", timeout=1.5).status_code == 200:
@@ -45,7 +52,7 @@ def get_wsl_renderer_url() -> str:
 
     try:
         res = subprocess.run(["wsl.exe", "-d", wsl_distro(), "-e", "hostname", "-I"], capture_output=True, text=True, timeout=2)
-        ips = res.stdout.strip().split()
+        ips = _ipv4s(res.stdout)
         if ips:
             return f"http://{ips[0]}:8000"
     except Exception:
