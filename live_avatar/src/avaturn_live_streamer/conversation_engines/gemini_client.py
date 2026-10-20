@@ -158,7 +158,11 @@ def reconnectable(error: BaseException) -> bool:
     return bool(errors) and all(one(e) for e in errors)
 
 
-_DEFAULT_LIVE_MODEL = "models/gemini-2.5-flash-native-audio-latest"
+# Gemini 3.8 Live: billed per minute of audio and keeps the conversation as text, ~1/6 of the cost
+# of gemini-2.5-flash-native-audio (which re-bills the whole audio context on every turn).
+_DEFAULT_LIVE_MODEL = "models/gemini-3.8-live"
+# Every turn re-sends the context: past ~16k tokens the oldest turns slide out (down to ~8k).
+_CONTEXT_COMPRESSION = {"triggerTokens": 16000, "slidingWindow": {"targetTokens": 8000}}
 _JARVIS_API_KEY = os.environ.get("API_KEY", "")
 
 DELEGATION_TOOLS = [
@@ -399,6 +403,7 @@ class GeminiApiClient:
                     "outputAudioTranscription": {},
                     "inputAudioTranscription": {},
                     "sessionResumption": {"handle": self._resume_handle} if self._resume_handle else {},
+                    "contextWindowCompression": _CONTEXT_COMPRESSION,
                 }
             }
             await ws.send(json.dumps(setup_msg))

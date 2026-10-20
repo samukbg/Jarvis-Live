@@ -59,7 +59,7 @@ class CartesiaEngineOptions(BaseModel):
 class GeminiEngineOptions(BaseModel):
     type: Literal["gemini"] = "gemini"
     api_key: str
-    model: str = "models/gemini-2.5-flash-native-audio-latest"
+    model: str = "models/gemini-3.8-live"
     prompt: str = ""
     voice: str = "Kore"
     avatar_id: str = "maria"

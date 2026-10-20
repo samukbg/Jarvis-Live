@@ -5,6 +5,13 @@ import { SHOW_CARD_PROMPT, SHOW_CARD_TOOL, showCard } from '../../cards/showCard
 import { TranscriptBuffer } from '../transcript.js';
 import { acknowledgement } from '../acknowledge.js';
 
+// Gemini 3.8 Live: billed per minute of audio and keeps the conversation as text, ~1/6 of the cost
+// of gemini-2.5-flash-native-audio (which re-bills the whole audio context on every turn).
+// GEMINI_LIVE_MODEL overrides it. gemini-3.1-flash-live-preview stopped answering audio on 2026-10-01.
+export const LIVE_MODEL = 'gemini-3.8-live';
+// Every turn re-sends the context: past ~16k tokens the oldest turns slide out (down to ~8k).
+export const CONTEXT_COMPRESSION = { triggerTokens: 16000, slidingWindow: { targetTokens: 8000 } };
+
 export const AGENT_LABELS = { agy: 'Antigravity', gemini: 'Antigravity', claude: 'Claude', hermes: 'Hermes', codex: 'Codex' };
 // How long Gemini gets to speak its own acknowledgement before Jarvis writes one.
 export const ACK_GRACE_MS = 2500;
@@ -113,14 +120,15 @@ export class GeminiLiveProvider {
       
       const client = this.createClient();
       
+      const model = process.env.GEMINI_LIVE_MODEL || LIVE_MODEL;
       this.session = await client.live.connect({
-        // gemini-3.1-flash-live-preview stopped answering audio on 2026-10-01 (1011 errors).
-        model: process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-latest',
+        model,
         config: {
           responseModalities: [Modality.AUDIO],
           // Native-audio models think before answering; a conversation doesn't need it
           // (first audio ~0.5-1 s sooner).
-          thinkingConfig: { thinkingBudget: 0 },
+          ...(model.includes('native-audio') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+          contextWindowCompression: CONTEXT_COMPRESSION,
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
