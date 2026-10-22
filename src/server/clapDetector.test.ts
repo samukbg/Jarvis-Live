@@ -63,6 +63,20 @@ test('clap: quieter claps in a quiet room still count; any chunk size', () => {
   assert.equal(run(concat(room(500), clap(0.15), room(250), clap(0.15), room(800)), 4096).length, 1);
 });
 
+test('clap: "More" catches faint claps that "Normal" ignores', () => {
+  const faint = () => concat(room(500), clap(0.03), room(250), clap(0.03), room(800));
+  const runAt = (sensitivity: number) => {
+    seed = 9;
+    const audio = faint();
+    const hits: number[] = [];
+    const d = new ClapDetector({ sampleRate: RATE, sensitivity, onDoubleClap: (ms) => hits.push(ms) });
+    for (let i = 0; i < audio.length; i += 512) d.push(audio.subarray(i, i + 512));
+    return hits;
+  };
+  assert.deepEqual(runAt(1), []);
+  assert.deepEqual(runAt(1.3), [870]);
+});
+
 test('clap: a single clap, claps too far apart, or applause do nothing', () => {
   seed = 3;
   assert.equal(run(concat(room(500), clap(), room(1500))).length, 0, 'single');

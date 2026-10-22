@@ -965,6 +965,8 @@ function broadcastNotification(notif) {
 // ── Pocket TTS Interceptor ──────────────────────────────────────────────────
 let activeModel = 'gemini';
 let activeLanguage = 'en';
+// When a device last sent what followed "Hey Jarvis" (wake_text): mic_toggle skips its greeting.
+let lastWakeTextAt = 0;
 let selectedModels = { hermes: 'nvidia/nemotron-3-super-120b-a12b:free', gemini: 'gemini-3.8-flash', claude: 'claude-3-haiku-20240307' };
 
 /** `agy` arguments for the selected Gemini model, valid for this agy's model list (agents/agyModel.js). */
@@ -1227,6 +1229,7 @@ function handleClientMessage(ws, message, isBinary) {
       // Skip when Gemini Live is active — Gemini Live handles voice end-to-end
       // What followed "Hey Jarvis" when a device's wake listener heard it: into Live when it's on.
       if (data.type === 'wake_text') {
+        lastWakeTextAt = Date.now();
         const text = String(data.text || '').trim().slice(0, 2000);
         if (text) {
           broadcast({ type: 'voice_transcript', text, role: 'user', is_final: true });
@@ -1273,6 +1276,8 @@ function handleClientMessage(ws, message, isBinary) {
               'it': 'Salve signore, come posso aiutarla oggi?',
               'es': 'Hola señor, ¿cómo puedo ayudarle hoy?'
             };
+            // "Hey Jarvis, <question>": the question is already on its way — no greeting over its answer.
+            if (Date.now() - lastWakeTextAt < 3000) return;
             speak(phrases[activeLanguage] || phrases['en']);
           }, 400);
         }

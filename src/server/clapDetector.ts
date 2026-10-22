@@ -114,7 +114,8 @@ export class ClapDetector {
     }
 
     // 2. A new onset?
-    const above = (CLAP.minAboveFloorDb * this.scale) | 0;
+    // More sensitive: a lower jump above the room's noise counts (18 dB → 13 dB at 1.3).
+    const above = (CLAP.minAboveFloorDb / this.scale) | 0;
     const minLevel = CLAP.minLevelDb + (1 - this.scale) * 12;
     const quietFrames = Math.round(CLAP.quietBeforeMs / CLAP.frameMs);
     const before = this.history.slice(-quietFrames);
