@@ -53,7 +53,9 @@ export class WakeListener {
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error('this page can’t use the microphone (it needs https or localhost)'), { name: 'NotSupportedError' });
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        // Raw: the speech filters (noise suppression, gain control, echo cancellation) smear claps
+        // into a slow swell, and standby only runs while Jarvis is silent anyway.
+        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         video: false,
       });
     } catch (e) {

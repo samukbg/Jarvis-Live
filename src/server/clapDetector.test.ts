@@ -77,6 +77,23 @@ test('clap: "More" catches faint claps that "Normal" ignores', () => {
   assert.deepEqual(runAt(1.3), [870]);
 });
 
+/** A clap as a laptop mic hears it: dull (mostly below ~1.5 kHz), 2 ms attack, ~20 ms fade. */
+const dullClap = (amp = 0.5) => {
+  const raw = Float32Array.from({ length: RATE * 0.15 }, (_, i) => {
+    const t = i / RATE;
+    return rand() * amp * Math.min(1, t / 0.002) * Math.exp(-t / 0.02);
+  });
+  // Moving average over 6 samples: keeps the low band (high-frequency share ≈ 0.05).
+  return raw.map((_, i) => { let a = 0; for (let k = 0; k < 6; k++) a += raw[Math.max(0, i - k)]; return a / 6; });
+};
+
+test('clap: dull real-world claps (little high-frequency energy) count', () => {
+  seed = 10;
+  assert.equal(run(concat(room(500), dullClap(), room(300), dullClap(), room(800))).length, 1);
+  seed = 11;
+  assert.equal(run(concat(room(500), dullClap(), room(1500))).length, 0, 'one dull clap alone');
+});
+
 test('clap: a single clap, claps too far apart, or applause do nothing', () => {
   seed = 3;
   assert.equal(run(concat(room(500), clap(), room(1500))).length, 0, 'single');

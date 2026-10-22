@@ -18,14 +18,18 @@ export const CLAP = {
   minRiseDb: 10,
   /** …and be at least this loud (dBFS), so distant taps don't count. */
   minLevelDb: -38,
-  /** Share of high-frequency energy at the onset (a palm crack ≈ 0.5–1.2, a vowel ≈ 0.05). */
-  minHighRatio: 0.25,
+  /**
+   * Share of high-frequency energy at the onset. Off: real claps through laptop and phone mics
+   * measured 0.01–0.95 (median ≈ 0.1) at 16 kHz, so it rejected most of them; the shape
+   * (sudden rise from quiet, fast fade) is what tells a clap from speech.
+   */
+  minHighRatio: 0,
   /** The 150 ms before the onset stays this far below it (not mid-word). */
   quietBeforeMs: 150,
   quietBeforeDb: 12,
   /** Within this time after the onset the level falls this much (impulsive, not a sustained sound). */
   decayWithinMs: 90,
-  decayDb: 14,
+  decayDb: 10, // real claps faded 11–37 dB in 90 ms (a vowel: ~0)
   /** The second clap comes this long after the first. */
   minGapMs: 150,
   maxGapMs: 700,
