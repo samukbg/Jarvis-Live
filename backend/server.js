@@ -967,7 +967,7 @@ let activeModel = 'gemini';
 let activeLanguage = 'en';
 // When a device last sent what followed "Hey Jarvis" (wake_text): mic_toggle skips its greeting.
 let lastWakeTextAt = 0;
-let selectedModels = { hermes: 'nvidia/nemotron-3-super-120b-a12b:free', gemini: 'gemini-3.8-flash', claude: 'claude-3-haiku-20240307' };
+let selectedModels = { hermes: 'nvidia/nemotron-3-super-120b-a12b:free', gemini: 'gemini-3.8-flash', claude: 'sonnet' };
 
 /** `agy` arguments for the selected Gemini model, valid for this agy's model list (agents/agyModel.js). */
 // Voice delegations: someone is waiting on the answer → the chosen model at low effort
@@ -1914,11 +1914,13 @@ User: ${command}`;
         proc.stdin?.on('error', () => {});
         proc.stdin?.end(sysPrompt + '\n');
       } else if (activeModel === 'claude') {
+        // Claude Code has no -y: permissions are skipped as for agy (the agent calls Jarvis's
+        // local tools, e.g. the calendar, with curl).
         proc = spawn(getCrossPlatformCommand('claude'), [
-          '-y',
+          '--dangerously-skip-permissions',
           '-p',
           '--output-format', 'text',
-          '--model', shellArg(selectedModels.claude || 'claude-3-haiku-20240307'),
+          '--model', shellArg(selectedModels.claude || 'sonnet'),
         ], getSpawnOptions());
         proc.stdin?.on('error', () => {});
         proc.stdin?.end(sysPrompt + '\n');
