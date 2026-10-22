@@ -15,6 +15,7 @@ import { SHOW_CARD_TOOL, showCard } from '../../cards/showCard.js';
 import { TranscriptBuffer } from '../transcript.js';
 import { webSearch } from '../webSearch.js';
 import { AGENT_LABELS, liveInstruction } from './GeminiLiveProvider.js';
+import { CALENDAR_TOOLS } from '../../calendar/card.js';
 
 export const DEFAULT_REALTIME_MODEL = 'gpt-realtime-2.1-mini';
 const DEFAULT_VOICE = 'marin';
@@ -47,7 +48,7 @@ export function toJsonSchema(schema) {
 const fn = (tool) => ({ type: 'function', name: tool.name, description: tool.description, parameters: toJsonSchema(tool.parameters) });
 
 /** The Realtime session's tools: web search, the agent (answer later), the phone, the dashboard, cards. */
-export function realtimeTools(agent) {
+export function realtimeTools(agent, { calendar = false } = {}) {
   const name = AGENT_LABELS[agent] || agent.toUpperCase();
   return [
     {
@@ -63,12 +64,13 @@ export function realtimeTools(agent) {
       parameters: { type: 'object', properties: { task: { type: 'string', description: 'The detailed task instruction to send to the agent' } }, required: ['task'] },
     },
     fn(PHONE_ACTION_TOOL), fn(BUSINESS_TOOL), fn(SHOW_CARD_TOOL),
+    ...(calendar ? CALENDAR_TOOLS.map(fn) : []),
   ];
 }
 
 /** The rules (shared with Gemini), plus how agent answers arrive, plus the turns before a drop. */
-export function realtimeInstruction(agent, history = []) {
-  let text = `${liveInstruction(agent, { search: 'call `search_web`' })}
+export function realtimeInstruction(agent, history = [], { calendar = null } = {}) {
+  let text = `${liveInstruction(agent, { search: 'call `search_web`', calendar })}
 
 The agent's answers come back later as a message starting with "(Agent result)": tell the user what it says, briefly and naturally.`;
   if (history.length) {
@@ -92,6 +94,7 @@ export class OpenAIRealtimeProvider {
     this.delegateToAgent = options.delegateToAgent;
     this.phoneBridge = options.phoneBridge;
     this.business = options.business || null;
+    this.calendar = options.calendar || null;
     this.showCard = options.showCard || showCard;
     this.forSpeaker = options.forSpeaker || ((fn) => fn());
 
@@ -234,7 +237,7 @@ export class OpenAIRealtimeProvider {
         session: {
           type: 'realtime',
           model,
-          instructions: realtimeInstruction(this.targetAgent, reconnect ? this.history : []),
+          instructions: realtimeInstruction(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null }),
           output_modalities: ['audio'],
           audio: {
             input: {
@@ -245,7 +248,7 @@ export class OpenAIRealtimeProvider {
             },
             output: { format: { type: 'audio/pcm', rate: 24000 }, voice: this.voice() },
           },
-          tools: realtimeTools(this.targetAgent),
+          tools: realtimeTools(this.targetAgent, { calendar: !!this.calendar }),
           tool_choice: 'auto',
         },
       });
@@ -466,6 +469,7 @@ export class OpenAIRealtimeProvider {
           else if (name === PHONE_ACTION_TOOL.name) output = { result: this.phoneBridge ? await this.phoneBridge.run(args) : 'Phone actions are not available.' };
           else if (name === BUSINESS_TOOL.name) output = { result: this.business ? this.business.show({ focus: args.name || undefined }).spoken : 'The business dashboard is not available on this Jarvis server.' };
           else if (name === SHOW_CARD_TOOL.name) output = { result: (await this.showCard(args, { broadcast: this.broadcast })).result };
+          else if (this.calendar?.isTool(name)) output = { result: await this.calendar.runTool(name, args) };
           else output = { error: `Unknown tool ${name}` };
         } catch (e) {
           output = { error: `${name} failed: ${e.message}. Tell the user in words what you can.` };

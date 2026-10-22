@@ -10,7 +10,8 @@ export const SPECIAL_CONTENT_TYPES = [
   'sports',
   'recipe',
   'wallet',
-  'business_dashboard'
+  'business_dashboard',
+  'agenda'
 ] as const;
 
 export type SpecialContentType = typeof SPECIAL_CONTENT_TYPES[number];
@@ -394,6 +395,41 @@ export interface BusinessDashboardData {
   empty?: boolean;
 }
 
+/** One event on the agenda card (Settings → Calendar's accounts; backend/calendar/API.md). */
+export interface AgendaEvent {
+  id: string;
+  title: string;
+  /** ISO with offset; all-day: 'YYYY-MM-DD'. */
+  start: string;
+  /** Same form; all-day: exclusive end date. */
+  end?: string;
+  allDay?: boolean;
+  location?: string;
+  /** The calendar's name. */
+  calendar?: string;
+  /** '#RRGGBB' */
+  color?: string;
+  /** Meet / Zoom / Teams link. */
+  meetingUrl?: string;
+}
+
+/** The agenda card: what's on the user's calendars for a day, a week or a search. */
+export interface AgendaData {
+  /** "Today", "Tomorrow", "This week", "Thu 23 Oct", "Search: dentist" */
+  title: string;
+  /** ISO: the range shown. */
+  from: string;
+  to: string;
+  /** IANA: times are shown in it. */
+  timeZone?: string;
+  /** Sorted by start, at most 40. */
+  events: AgendaEvent[];
+  /** The event just added / changed (accented). */
+  highlightId?: string;
+  /** No calendar connected: the card invites the user to Settings → Calendar. */
+  empty?: boolean;
+}
+
 export interface DetectedSpecialContent {
   type: SpecialContentType;
   data: 
@@ -408,6 +444,7 @@ export interface DetectedSpecialContent {
     | SportsScoreData 
     | RecipeData
     | WalletData
-    | BusinessDashboardData;
+    | BusinessDashboardData
+    | AgendaData;
   summaryText?: string;
 }

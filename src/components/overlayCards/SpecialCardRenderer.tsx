@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Eye, Code, MessageSquareQuote } from 'lucide-react';
-import type { DetectedSpecialContent, WeatherData, FinanceData, FlightData, SystemDiagnosticsData, TaskRoadmapData, MediaAudioData, TranslationData, ChartData, SportsScoreData, RecipeData, WalletData, BusinessDashboardData } from './types';
+import type { DetectedSpecialContent, WeatherData, FinanceData, FlightData, SystemDiagnosticsData, TaskRoadmapData, MediaAudioData, TranslationData, ChartData, SportsScoreData, RecipeData, WalletData, BusinessDashboardData, AgendaData } from './types';
 import { WeatherCard } from './WeatherCard';
 import { FinanceCard } from './FinanceCard';
 import { FlightCard } from './FlightCard';
@@ -14,6 +14,7 @@ import { SportsScoreCard } from './SportsScoreCard';
 import { RecipeCard } from './RecipeCard';
 import { WalletCard } from './WalletCard';
 import { BusinessDashboardCard } from './BusinessDashboardCard';
+import { AgendaCard } from './AgendaCard';
 import { FormattedMarkdown } from '../FormattedMarkdown';
 import { useCardEnrichment } from './useCardEnrichment';
 import type { CardLive } from './enrichment';
@@ -82,6 +83,7 @@ export const SpecialCardRenderer: React.FC<{
       case 'recipe': return <RecipeCard data={data as RecipeData} />;
       case 'wallet': return <WalletCard data={data as WalletData} />;
       case 'business_dashboard': return <BusinessDashboardCard data={data as BusinessDashboardData} />;
+      case 'agenda': return <AgendaCard data={data as AgendaData} />;
       default: return <FormattedMarkdown content={rawContent} />;
     }
   };
@@ -118,7 +120,7 @@ export const SpecialCardRenderer: React.FC<{
           {viewMode === 'visual' ? renderComponent() : <FormattedMarkdown content={rawContent} />}
         </motion.div>
       </AnimatePresence>
-      {viewMode === 'visual' && <AgentNote content={rawContent} agentName={agentName} color={meta.color} stripCardJson={detected.type === 'business_dashboard'} />}
+      {viewMode === 'visual' && <AgentNote content={rawContent} agentName={agentName} color={meta.color} stripCardJson={detected.type === 'business_dashboard' || detected.type === 'agenda'} />}
       {viewMode === 'visual' && <SourceFooter sources={enrichment?.sources} live={live.live} loading={loading} />}
     </div>
   );
@@ -139,4 +141,5 @@ export const LABELS: Record<string, { label: string; color: string }> = {
   recipe: { label: 'Recipe', color: '#FB923C' },
   wallet: { label: 'Wallet', color: '#34D399' },
   business_dashboard: { label: 'Business', color: '#818CF8' },
+  agenda: { label: 'Calendar', color: '#FB7185' },
 };

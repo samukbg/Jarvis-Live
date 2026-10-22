@@ -57,6 +57,7 @@ Most "AI assistants" are a chat box. Jarvis Live is an **AI operating layer for 
 - **Or OpenAI Realtime** (`gpt-realtime-2.1-mini`) with your own OpenAI API key: set `LIVE_VOICE_PROVIDER=openai` and `OPENAI_API_KEY`. Same tools (agents, phone actions, cards), plus a web-search tool.
 - **Barge-in**: talk over Jarvis and it yields, like a real conversation.
 - **Wake word** ("Hi Jarvis", "Wake up") through a local [RealtimeSTT](https://github.com/KoljaB/RealtimeSTT) server.
+- **[Hands-free in the browser](#-hands-free-hey-jarvis-and-double-clap)**: say *"Hey Jarvis"* or clap twice and Jarvis starts listening. Recognised on your device, no server needed.
 - **Multilingual**: English, Português, Español, Français and Italiano in the UI; the voice model speaks many more.
 - **Conversation memory**: recent turns persist to `memory.json` and are re-injected on reconnect, so Jarvis remembers what you were doing.
 
@@ -80,6 +81,7 @@ Jarvis **auto-detects** which agent CLIs are installed, lists their models, rout
 - **Neural map**: a live three.js visualization of Jarvis and its agents.
 - **Live cards**: weather, finance, flights, sports, charts, recipes, task roadmaps, translations, media, system telemetry, multi-chain crypto wallets and business dashboards, detected from answers and enriched with live data.
 - **Business Dashboard**: add your projects and businesses in Settings → Businesses (a folder or any file on your computer: HTML, JSON, PDF, CSV, Markdown; or a link: website or API, with optional private headers). Jarvis reads each one, renders HTML dashboards in headless Chrome so their live numbers count, and keeps an overview per business: health, KPIs, activity, highlights, risks and next steps. Ask *"How's my business?"* to open the card. Secret files (`.env`, keys) are never read, and the files stay on your computer.
+- **[Calendar](#-calendar)**: connect Google, iCloud, any CalDAV server, calendar links or `.ics` files in Settings → Calendar. Jarvis knows your week, answers *"Am I free tonight?"*, adds, moves and cancels events by voice and shows an agenda card. Your events stay on your computer.
 - **Vision**: let Jarvis see through your camera or a shared screen.
 - **Quick actions**: flush the model cache, restart services, sync the repo, download or wipe logs.
 - Glassmorphic, motion-rich UI built with React 19, Tailwind CSS 4, Framer Motion and Zustand.
@@ -236,6 +238,43 @@ Turn **one portrait photo** into a real-time talking avatar, and optionally give
 - Voice cloning needs the XTTS voice server (`live_avatar/voice_server/`, port 8010). On a single GPU it competes with the 25 fps renderer, so a second GPU or machine (`XTTS_URL`) gives the smoothest result.
 - **Use photos and voices you have the right to use.** Only create avatars of yourself or of people who gave you their consent.
 
+## 📅 Calendar
+
+**Settings → Calendar** connects the calendars Jarvis reads and writes:
+
+| Source | How | Jarvis can |
+| :-- | :-- | :-- |
+| **Google Calendar** | Sign in with Google through your own OAuth client (see below) | read, add, move, delete |
+| **iCloud** | Apple ID + an app-specific password ([appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords) | read, add, move, delete |
+| **Fastmail, Nextcloud, Yahoo, any CalDAV** | server, user name, app password | read, add, move, delete |
+| **Calendar link** | an https / webcal `.ics` address (Google's secret iCal address, Outlook's published calendar, schools, teams, fixtures) | read |
+| **.ics file** | import (drag & drop or pick a file) | read |
+
+- Everything stays **on your computer** (`calendar-accounts.json`, readable only by you, plus an event cache). Accounts sync every 15 minutes, 30 days back to 6 months ahead; repeating events, moved or cancelled occurrences and time zones (including Outlook's Windows zone names) are handled, and the same meeting in two calendars shows once.
+- **Jarvis knows your week**: the next 7 days go into every voice conversation, so *"Am I free tonight?"* is answered without a lookup. Turn it off in Settings → Calendar.
+- **Voice tools** (Gemini Live, OpenAI Realtime, the live avatar): `calendar_agenda`, `calendar_add_event` (warns about clashes), `calendar_update_event`, `calendar_delete_event` (only after you confirm). With Gemini Live off, agenda questions are answered on the computer in a second, and the agents get the agenda plus a short-lived local endpoint to change it.
+- The **agenda card** shows the day or week with a "now" line, the next event's countdown, Join buttons for Meet / Zoom / Teams and the event just added.
+- Try: *"What's on my calendar tomorrow?"*, *"Am I free Friday afternoon?"*, *"Add lunch with Ana on Friday at 1 pm"*, *"Move my dentist to 4"*, *"Cancel the 3 pm call."*
+- API: [`backend/calendar/API.md`](backend/calendar/API.md).
+
+**Sign in with Google (your own OAuth client).** Google sign-in needs an OAuth client of your own; until it's set, Settings → Calendar explains why the Google button is off, and you can still add a Google calendar with its secret iCal address as a calendar link.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create (or pick) a project and enable the **Google Calendar API**.
+2. Set up the **OAuth consent screen** (External, in testing is fine) and add your Google account as a test user.
+3. **Credentials → Create credentials → OAuth client ID → Desktop app**. Google accepts any `http://localhost` port for Desktop clients, so Jarvis signs in through `http://localhost:<PORT>/api/calendar/google/callback` (`PORT` defaults to `4000`). Open the Jarvis web client on the same computer as the server for this step.
+4. Put the client's ID and secret in `.env` as `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, restart the server, then **Settings → Calendar → Add → Google**.
+
+The refresh token is kept on your computer next to the other calendar accounts and only ever sent to Google.
+
+## 👂 Hands-free: "Hey Jarvis" and double clap
+
+**Settings → Hands-free** has two switches (off by default, saved per browser), a clap sensitivity, a live status line and a Test button:
+
+- **"Hey Jarvis"**: say it and Jarvis starts listening; *"Hey Jarvis, what's the weather in Paris?"* also passes the question on. The MIT-licensed **[Moonshine tiny](https://huggingface.co/onnx-community/moonshine-tiny-ONNX)** speech model runs in a web worker on short speech segments only, and answers about 0.5 s after you stop speaking. It is downloaded once from Hugging Face (about 52 MB) and cached by the browser; ONNX Runtime's WebAssembly is served by your own Jarvis build (`dist/ort/`), not a CDN.
+- **Double clap**: two claps 150 to 700 ms apart, then quiet. A third clap, applause, knocking, speech or a door slam don't count.
+- Sound is analysed **on your device**: nothing is sent anywhere until Jarvis hears its name or two claps. Standby pauses while Jarvis listens, talks or runs an avatar call, so it never competes with the conversation's microphone, and it works while Jarvis is open in a browser tab.
+- This is separate from the server-side wake word above (RealtimeSTT); you can use either.
+
 ## ⚙️ Configuration
 
 Everything lives in `.env` (see [`.env.example`](.env.example)); every setting is optional except the keys.
@@ -251,6 +290,7 @@ Everything lives in `.env` (see [`.env.example`](.env.example)); every setting i
 | `TTS_SYSTEM_VOICE` | The computer voice that reads answers with Gemini Live off, per language (`en=Moira;pt=Joana`; default: a woman's voice, Samantha on macOS) |
 | `HF_TOKEN` | Hugging Face token for the gated AVTR-1 weights and portraits |
 | `CRYPTO_WALLET`, `NEWS_RSS_URLS` | Optional wallet and news cards; also editable in Settings |
+| `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | Optional: your own Google "Desktop app" OAuth client, for **[Sign in with Google](#-calendar)** in Settings → Calendar (redirect `http://localhost:<PORT>/api/calendar/google/callback`) |
 
 **Security:** the server refuses requests without the key, the web client never embeds it (you enter it in Settings), and `.env` is gitignored. Expose Jarvis to the internet only over HTTPS. Agents run commands on your machine, so treat the API key like a password.
 

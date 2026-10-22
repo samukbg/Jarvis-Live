@@ -2,7 +2,7 @@
 // device, newest first, grouped by day — tap one to open its card again.
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  BarChart3, Briefcase, ChefHat, ChevronRight, CloudSun, Cpu, History, Languages, ListChecks, MessageSquare, Music, Plane, Trash2, TrendingUp, Trophy, Wallet, X,
+  BarChart3, Briefcase, CalendarDays, ChefHat, ChevronRight, CloudSun, Cpu, History, Languages, ListChecks, MessageSquare, Music, Plane, Trash2, TrendingUp, Trophy, Wallet, X,
   type LucideIcon,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -25,6 +25,7 @@ const TYPE_ICON: Record<SpecialContentType, LucideIcon> = {
   recipe: ChefHat,
   wallet: Wallet,
   business_dashboard: Briefcase,
+  agenda: CalendarDays,
 };
 
 /** Icon, label and colour for an entry's card type (a plain answer: a speech bubble). */

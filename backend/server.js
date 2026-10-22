@@ -38,6 +38,11 @@ import { detectSpecialContent } from './cards/detect.generated.js';
 import { stripWakeWord, wakeReply } from './conversation/wakeWord.js';
 import { createBusinessService } from './business/service.js';
 import { registerBusinessRoutes } from './business/routes.js';
+import { createCalendarService } from './calendar/service.js';
+import { registerCalendarRoutes } from './calendar/routes.js';
+import { CALENDAR_TOOLS, CALENDAR_TOOL_PATHS } from './calendar/card.js';
+import { aboutSchedule, agendaQuery, spokenShort } from './calendar/intent.js';
+import { SELF_HOSTED_REASON } from './calendar/googleAuth.js';
 import { BUSINESS_PROMPT, BUSINESS_TOOL } from './business/card.js';
 import { GeminiLiveProvider } from './conversation/providers/GeminiLiveProvider.js';
 import { OpenAIRealtimeProvider } from './conversation/providers/OpenAIRealtimeProvider.js';
@@ -79,6 +84,10 @@ app.use((req, res, next) => {
     req.path.startsWith('/api/models') ||
     req.path.startsWith('/api/agents') ||
     req.path === '/api/server/status' ||
+    // Calendar: the Google sign-in's redirect (its one-time state) and the agents' local tool
+    // calls (a short-lived token, this computer only) — calendar/routes.js checks them.
+    req.path === '/api/calendar/google/callback' ||
+    req.path.startsWith('/api/calendar/agent/') ||
     (req.method === 'GET' && req.path.startsWith('/api/settings')) ||
     req.path === '/' ||
     req.path.startsWith('/assets')
@@ -738,6 +747,8 @@ app.get('/api/device/tool', (req, res) => {
     tools: [
       { tool: BUSINESS_TOOL, prompt: BUSINESS_PROMPT, path: '/api/business/show' },
       { tool: SHOW_CARD_TOOL, prompt: SHOW_CARD_PROMPT, path: '/api/cards/show' },
+      // The calendar: one prompt (with today's date) for the four tools.
+      ...CALENDAR_TOOLS.map((tool, i) => ({ tool, prompt: i === 0 ? calendarService.prompt() : '', path: CALENDAR_TOOL_PATHS[i] })),
     ],
   });
 });
@@ -1214,6 +1225,18 @@ function handleClientMessage(ws, message, isBinary) {
       }
       // voice_command: accurate transcription from browser WebSpeech API (primary path)
       // Skip when Gemini Live is active — Gemini Live handles voice end-to-end
+      // What followed "Hey Jarvis" when a device's wake listener heard it: into Live when it's on.
+      if (data.type === 'wake_text') {
+        const text = String(data.text || '').trim().slice(0, 2000);
+        if (text) {
+          broadcast({ type: 'voice_transcript', text, role: 'user', is_final: true });
+          stopSpeaking();
+          if (!(geminiLiveMode && liveVoice().sendUserText?.(text))) {
+            cancelActiveCommands();
+            handleOrchestration(text, 'text');
+          }
+        }
+      }
       if (data.type === 'voice_command') {
         if (geminiLiveMode) {
           console.log(`[VOICE_CMD] Suppressed (Gemini Live active): "${data.text?.slice(0, 60)}"`);
@@ -1661,10 +1684,22 @@ const conversationRuntime = new ConversationRuntime({
 // Settings → Businesses: sources analysed in the background, the Business Dashboard card
 // (business/). Created here, after broadcast's clients exist.
 const businessService = createBusinessService({ dataDir: DATA_DIR, broadcast, log: (line) => { console.log(line); broadcastLog(line); } });
+// Settings → Calendar: Google / iCloud / CalDAV / links / files, synced here (calendar/). Google
+// sign-in needs your own OAuth client (GOOGLE_OAUTH_CLIENT_ID / _SECRET, a "Desktop app" client).
+const calendarService = createCalendarService({
+  dataDir: DATA_DIR,
+  broadcast,
+  port: Number(port),
+  googleUnavailableReason: SELF_HOSTED_REASON,
+  phoneAction: (args) => phoneBridge.run(args),
+  log: (line) => { console.log(line); broadcastLog(line); },
+});
+calendarService.start();
 
 const liveVoiceOptions = {
   phoneBridge,
   business: businessService,
+  calendar: calendarService,
   broadcast,
   broadcastAudioChunk,
   broadcastLog,
@@ -1806,6 +1841,21 @@ async function executeOrchestration(command, source = 'text') {
   }
   if (wake.called) command = wake.rest;
 
+  // "What's on my calendar tomorrow?": answered from the synced calendars, no agent run.
+  const agenda = calendarService.hasAccounts() ? agendaQuery(command) : null;
+  if (agenda) {
+    try {
+      const { data } = await calendarService.show({ day: agenda.day });
+      const reply = spokenShort(data.events, { day: agenda.day, title: data.title, lang: String(activeLanguage || 'en').slice(0, 2) });
+      broadcastLog(`JARVIS: ${reply}`);
+      broadcast({ type: 'voice_transcript', text: reply, role: 'assistant', is_final: true });
+      if (source.startsWith('voice') && !geminiLiveMode) speak(reply);
+      return reply;
+    } catch (e) {
+      broadcastLog(`[calendar] ${e.message}`);
+    }
+  }
+
   isOrchestrating = true;
   broadcastAgentStatus('jarvis', 'THINKING');
   broadcastAgentStatus(activeModel, 'THINKING');
@@ -1826,8 +1876,10 @@ async function executeOrchestration(command, source = 'text') {
         styleInstruction = "The user spoke this via voice, and your response will be read aloud by Text-To-Speech. Keep your response brief, conversational, and completely free of markdown formatting (no asterisks, no bullet points). Use natural spoken English. Write figures with their symbols (12°C, 54°F, $1,234, 5%) and name the place for weather (\"In Paris, tomorrow…\") — the answer also opens a card on the user's screen.";
       }
       
+      // The user's calendar, when they talk about it: the agenda and how to change it.
+      const calendarBrief = aboutSchedule(command) || /\b(remind|lembra|recuerda|rappelle)/i.test(command) ? await calendarService.agentBrief().catch(() => null) : null;
       const sysPrompt = `System instructions: You are JARVIS, an advanced AI assistant. Answer the user directly. ${styleInstruction}
-You have full access to your tools. Use them to execute the user's command if needed.
+You have full access to your tools. Use them to execute the user's command if needed.${calendarBrief ? `\n\n${calendarBrief}` : ''}
 
 User: ${command}`;
       
@@ -2506,6 +2558,10 @@ registerCardRoutes(app, { broadcast: (msg) => broadcast(msg) });
 // Whoever holds this server's API_KEY is its owner (no Jarvis Cloud tokens here).
 registerBusinessRoutes(app, {
   service: businessService,
+  role: (req) => (isAuthorized(requestKey(req)) ? 'owner' : null),
+});
+registerCalendarRoutes(app, {
+  service: calendarService,
   role: (req) => (isAuthorized(requestKey(req)) ? 'owner' : null),
 });
 

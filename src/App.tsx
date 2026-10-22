@@ -11,6 +11,7 @@ import { HistorySheet } from './shell/HistorySheet';
 import { CommandScreen } from './screens/CommandScreen';
 import { NeuralScreen } from './screens/NeuralScreen';
 import { Pressable, alpha, palette, spring } from './ui';
+import { startWakeStandby } from './runtime/wake/standby';
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -82,6 +83,8 @@ function ConnectionBanner() {
 
 function App() {
   const screen = useStore((s) => s.screen);
+  // "Hey Jarvis" / double clap standby (idle unless turned on in Settings → Hands-free).
+  useEffect(() => startWakeStandby(), []);
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden">
       <Backdrop />

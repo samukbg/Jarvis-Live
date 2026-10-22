@@ -1,13 +1,15 @@
 // The voice stage (mobile VoiceStageCard): the orb or the live avatar in a card that tilts
 // with the pointer, washed in the voice state's colour, with the caption and live transcript.
 import { AnimatePresence, motion, useMotionTemplate, useReducedMotion, useTransform } from 'framer-motion';
-import { Eye, EyeOff, MonitorUp, Orbit, UserRound } from 'lucide-react';
+import { Ear, Eye, EyeOff, MonitorUp, Orbit, UserRound } from 'lucide-react';
 import { useStore } from '../../store';
 import { BlobAnimation } from '../../components/BlobAnimation';
 import { TalkingAvatar } from '../../components/TalkingAvatar';
 import { IconButton, Pressable, SegmentedControl, StatusDot, alpha, palette, spring } from '../../ui';
 import { usePointer } from '../../shell/Backdrop';
 import { useIsDelegating, useVoiceStatus } from '../../shell/status';
+import { useWakeStatus } from '../../runtime/wake/standby';
+import { standbyHint } from '../../server/wakeStandby';
 
 const caption = (s: { connected: boolean; isListening: boolean; isSpeaking: boolean; isDelegating: boolean; avatarMode: boolean }) => {
   if (!s.connected) return 'Offline — reconnecting';
@@ -31,8 +33,13 @@ export function VoiceStage() {
   const toggleMic = useStore((s) => s.toggleMic);
   const isDelegating = useIsDelegating();
   const status = useVoiceStatus();
+  const openSettings = useStore((s) => s.openSettings);
   const reduced = useReducedMotion();
   const transcript = voiceState.transcript?.trim();
+  // Hands-free standby: a quiet hint under the caption while it listens for "Hey Jarvis" / claps.
+  const wakeHeyJarvis = useStore((s) => s.wakeHeyJarvis);
+  const wakeClap = useStore((s) => s.wakeClap);
+  const wakeHint = useWakeStatus((w) => standbyHint({ heyJarvis: wakeHeyJarvis, clap: wakeClap }, w.phase, w.model));
 
   // Parallax: the card tilts a few degrees towards the pointer, its glow follows it.
   const { x, y } = usePointer();
@@ -93,6 +100,23 @@ export function VoiceStage() {
                 {caption({ connected, isListening: voiceState.isListening, isSpeaking: voiceState.isSpeaking, isDelegating, avatarMode })}
               </span>
             </motion.div>
+          </AnimatePresence>
+
+          <AnimatePresence initial={false}>
+            {wakeHint && !voiceState.isListening && (
+              <motion.div key="wake-hint" className="-mt-1.5 flex justify-center"
+                initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }}>
+                <button type="button" onClick={() => openSettings('handsfree')} title="Hands-free settings" data-testid="wake-hint"
+                  className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 transition-colors hover:bg-white/5">
+                  <motion.span aria-hidden className="grid place-items-center" style={{ color: palette.accent }}
+                    animate={reduced ? undefined : { opacity: [0.5, 1, 0.5], scale: [0.94, 1, 0.94] }}
+                    transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}>
+                    <Ear size={13} />
+                  </motion.span>
+                  <span className="t-footnote" style={{ color: palette.textTertiary }}>{wakeHint}</span>
+                </button>
+              </motion.div>
+            )}
           </AnimatePresence>
 
           <AnimatePresence>

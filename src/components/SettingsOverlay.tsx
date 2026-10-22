@@ -7,6 +7,8 @@ import { AvatarPicker } from './AvatarPicker';
 import { Section } from './SettingsSection';
 import { AvatarServerSection } from './ComputerSettings';
 import { BusinessSettings } from './BusinessSettings';
+import { CalendarSettings } from './CalendarSettings';
+import { WakeSettings } from './WakeSettings';
 
 export const SettingsOverlay: React.FC = () => {
   const { 
@@ -50,6 +52,21 @@ export const SettingsOverlay: React.FC = () => {
     setLocalNews(newsRssUrl);
     setLocalAvatarId(avatarId || DEFAULT_AVATAR);
   }, [hostUrl, apiKey, appLanguage, ttsServer, cryptoWallet, newsRssUrl, avatarId, settingsOpen]);
+
+  // Opened at a section (openSettings('calendar') from the agenda card…): scroll it into view
+  // once the sheet has laid it out; it pulses briefly so the eye finds it.
+  const settingsSection = useStore((st) => st.settingsSection);
+  useEffect(() => {
+    if (!settingsOpen || !settingsSection) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(`settings-${settingsSection}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      (el.firstElementChild as HTMLElement | null ?? el).animate?.([{ boxShadow: `0 0 0 0 ${alpha(palette.accent, 0)}` }, { boxShadow: `0 0 0 3px ${alpha(palette.accent, 120)}` }, { boxShadow: `0 0 0 0 ${alpha(palette.accent, 0)}` }], { duration: 1400, easing: 'ease-out' });
+      useStore.setState({ settingsSection: null });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [settingsOpen, settingsSection]);
 
   const handleSave = () => {
     updateSettings({
@@ -165,6 +182,7 @@ export const SettingsOverlay: React.FC = () => {
           {/* Right after Conversation: the user's own business is what they come back to; the server
               and avatar sections below are set up once. Shown only to this computer's owner. */}
           <BusinessSettings open={settingsOpen} />
+          <CalendarSettings open={settingsOpen} />
 
           <Section title="Server" aside={<span className="t-footnote" style={{ color: serverError ? palette.warning : palette.textTertiary }}>{activeServerName || (serverError ? 'Not connected' : 'Connecting…')}</span>}>
             <input type="text" value={localHost} onChange={e => setLocalHost(e.target.value)} placeholder="https://your-domain.com or http://192.168.1.10:4000" className={input} />
@@ -172,6 +190,11 @@ export const SettingsOverlay: React.FC = () => {
             <p className="t-footnote" style={{ color: palette.textTertiary }}>Voice and the avatar both connect to this server.</p>
             {serverError && <p className="t-footnote" style={{ color: palette.warning }}>{serverError}</p>}
           </Section>
+
+          {/* Per device (this browser / this app): kept locally, never sent to the server. */}
+          <div id="settings-handsfree" className="flex scroll-mt-4 flex-col gap-3">
+            <WakeSettings />
+          </div>
 
           <AvatarServerSection open={settingsOpen} />
 

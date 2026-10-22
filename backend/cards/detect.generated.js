@@ -29,7 +29,8 @@ var JSON_TYPES = [
 	"sports",
 	"recipe",
 	"wallet",
-	"business_dashboard"
+	"business_dashboard",
+	"agenda"
 ];
 var isNum = (v) => typeof v === "number" && Number.isFinite(v);
 /** Minimum fields a card needs to be meaningful. */
@@ -53,6 +54,7 @@ function hasCoreFields(type, d) {
 		case "recipe": return Array.isArray(d.ingredients) && d.ingredients.length > 0;
 		case "wallet": return typeof d.address === "string";
 		case "business_dashboard": return Array.isArray(d.businesses) && (d.businesses.length > 0 || d.empty === true);
+		case "agenda": return Array.isArray(d.events) && (d.events.length > 0 || d.empty === true || typeof d.title === "string");
 		default: return false;
 	}
 }

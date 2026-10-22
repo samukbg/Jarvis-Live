@@ -2,6 +2,7 @@ import { Modality } from '@google/genai';
 import { PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from '../../device/phoneActions.js';
 import { BUSINESS_PROMPT, BUSINESS_TOOL } from '../../business/card.js';
 import { SHOW_CARD_PROMPT, SHOW_CARD_TOOL, showCard } from '../../cards/showCard.js';
+import { CALENDAR_TOOLS } from '../../calendar/card.js';
 import { TranscriptBuffer } from '../transcript.js';
 import { acknowledgement } from '../acknowledge.js';
 
@@ -20,7 +21,7 @@ export const ACK_GRACE_MS = 2500;
  * The Live session's rules: search answers itself, computer tasks go to the agent — said out loud
  * first. `search`: how this voice searches (Gemini's Google Search; a tool for the others).
  */
-export function liveInstruction(agent, { search = 'use Google Search' } = {}) {
+export function liveInstruction(agent, { search = 'use Google Search', calendar = null } = {}) {
   const tool = `delegate_to_${agent}`;
   const name = AGENT_LABELS[agent] || agent.toUpperCase();
   return `You are Jarvis, a concise and helpful AI assistant. Respond naturally and briefly, in the language the user speaks.
@@ -34,11 +35,11 @@ ${PHONE_ACTION_PROMPT}
 
 ${BUSINESS_PROMPT}
 
-${SHOW_CARD_PROMPT}`;
+${SHOW_CARD_PROMPT}${calendar ? `\n\n${calendar}` : ''}`;
 }
 
 /** Google Search (answers in ~2 s) plus the agent (non-blocking: Gemini keeps talking while it works). */
-export function liveTools(agent) {
+export function liveTools(agent, { calendar = false } = {}) {
   return [
     { googleSearch: {} },
     {
@@ -51,7 +52,7 @@ export function liveTools(agent) {
           properties: { task: { type: 'STRING', description: 'The detailed task instruction to send to the agent' } },
           required: ['task'],
         },
-      }, PHONE_ACTION_TOOL, BUSINESS_TOOL, SHOW_CARD_TOOL],
+      }, PHONE_ACTION_TOOL, BUSINESS_TOOL, SHOW_CARD_TOOL, ...(calendar ? CALENDAR_TOOLS : [])],
     },
   ];
 }
@@ -68,6 +69,8 @@ export class GeminiLiveProvider {
     this.phoneBridge = options.phoneBridge;
     // Business Dashboard (business/service.js): show_business_dashboard opens the card.
     this.business = options.business || null;
+    // Calendar (calendar/service.js): the agenda, adding / moving / deleting events.
+    this.calendar = options.calendar || null;
     // show_card (cards/showCard.js): a live card from the answer's facts.
     this.showCard = options.showCard || showCard;
     this.speak = options.speak;
@@ -136,10 +139,10 @@ export class GeminiLiveProvider {
               }
             }
           },
-          systemInstruction: liveInstruction(this.targetAgent),
+          systemInstruction: liveInstruction(this.targetAgent, { calendar: this.calendar?.prompt() || null }),
           outputAudioTranscription: {},
           inputAudioTranscription: {},
-          tools: liveTools(this.targetAgent),
+          tools: liveTools(this.targetAgent, { calendar: !!this.calendar }),
         },
         callbacks: {
           onopen: () => {
@@ -226,6 +229,18 @@ export class GeminiLiveProvider {
                 } catch (e) {
                   this.broadcastLog(`[GEMINI ERROR] Business dashboard response failed: ${e.message}`);
                 }
+              } else if (fc && this.calendar?.isTool(fc.name)) {
+                // Local data (a CalDAV / Google call at most): the agenda card opens on the screens
+                // and Gemini speaks from the result.
+                const session = this.session;
+                (async () => {
+                  const result = await this.calendar.runTool(fc.name, fc.args || {});
+                  try {
+                    session?.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] });
+                  } catch (e) {
+                    this.broadcastLog(`[GEMINI ERROR] Calendar response failed: ${e.message}`);
+                  }
+                })();
               } else if (fc && fc.name === SHOW_CARD_TOOL.name) {
                 // The card opens on the device talking (forSpeaker origin); Gemini speaks the answer.
                 const session = this.session;
@@ -322,6 +337,14 @@ export class GeminiLiveProvider {
   /** A camera / screen frame (base64): Gemini sees what the user shows. */
   sendImage(mimeType, data) {
     this.session?.sendRealtimeInput({ video: { mimeType: mimeType || 'image/jpeg', data } });
+  }
+
+  /** Text into the Live session (what followed "Hey Jarvis"). False when no session is open. */
+  sendUserText(text) {
+    if (!this.session?.sendClientContent) return false;
+    this.jarvisSpeech.flush();
+    this.session.sendClientContent({ turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true });
+    return true;
   }
 
   disconnect() {

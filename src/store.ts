@@ -5,6 +5,7 @@ import {
   normalizeHost, resolveServer, ServerUnavailableError, wsUrlFor,
   type ResolvedServer, type ServerSettings,
 } from './server/serverConnection';
+import type { ClapSensitivity } from './server/wakeStandby';
 
 export interface Agent {
   id: string;
@@ -129,6 +130,13 @@ interface AppState {
   appendStream: (agentId: string, token: string) => void;
   sendCommand: (cmd: string) => void;
   toggleMic: () => void;
+  /** What was said after "Hey Jarvis" ("what's the weather"): into the current conversation (server `wake_text`). */
+  sendWakeText: (text: string) => void;
+  /** Hands-free activation on this device (kept locally, never sent to the server): "Hey Jarvis" and/or a double clap. */
+  wakeHeyJarvis: boolean;
+  wakeClap: boolean;
+  clapSensitivity: ClapSensitivity;
+  setWakeSettings: (s: Partial<{ wakeHeyJarvis: boolean; wakeClap: boolean; clapSensitivity: ClapSensitivity }>) => void;
   feed: FeedItem[];
   notifications: Notification[];
   addNotification: (n: Omit<Notification, 'id' | 'time'>) => void;
@@ -167,6 +175,10 @@ interface AppState {
   toggleScreen: () => Promise<void>;
   settingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
+  /** The Settings section to scroll to when the sheet opens (openSettings), else null. */
+  settingsSection: string | null;
+  /** Opens Settings at a section (its element id is `settings-<section>`). */
+  openSettings: (section?: string) => void;
   hostUrl: string;
   /** Your Jarvis server: hostUrl + apiKey. */
   apiKey: string;
@@ -239,6 +251,8 @@ export const useStore = create<AppState>((set, get) => {
   let outputAnalyser: AnalyserNode | null = null;
   let outputAnimFrame = 0;
   let scriptProcessor: ScriptProcessorNode | null = null;
+  /** The main microphone's stream: its tracks stop when listening stops (the mic is free again). */
+  let micStream: MediaStream | null = null;
   let nextPlayTime = 0;
   let startTime = 0;
   
@@ -757,9 +771,21 @@ export const useStore = create<AppState>((set, get) => {
     }
   };
 
+  const stopAudioCapture = () => {
+    if (scriptProcessor) { scriptProcessor.onaudioprocess = null; scriptProcessor.disconnect(); scriptProcessor = null; }
+    if (source) { source.disconnect(); source = null; }
+    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  };
+
   const startAudioCapture = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 24000, echoCancellation: true, noiseSuppression: true } });
+      // Turned off (or on again) while the browser was opening the mic: this stream isn't needed.
+      if (!get().voiceState.isListening || micStream) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      micStream = stream;
       if (!audioContext) {
         audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       }
@@ -1012,13 +1038,21 @@ export const useStore = create<AppState>((set, get) => {
       const nextState = !get().voiceState.isListening;
       set((state) => ({ voiceState: { ...state.voiceState, isListening: nextState, transcript: '' } }));
       if (nextState) startAudioCapture();
-      else {
-        if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
-        if (source) { source.disconnect(); source = null; }
-      }
+      else stopAudioCapture();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'mic_toggle', active: nextState }));
       }
+    },
+    sendWakeText: (text) => {
+      const t = text.trim();
+      if (t && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'wake_text', text: t }));
+    },
+    wakeHeyJarvis: false,
+    wakeClap: false,
+    clapSensitivity: 'normal',
+    setWakeSettings: (w) => {
+      set(w);
+      saveLocalSettings(get());
     },
     feed: [],
     notifications: [],
@@ -1072,7 +1106,9 @@ export const useStore = create<AppState>((set, get) => {
     removeFromHistory: (id) => set((s) => ({ resultHistory: s.resultHistory.filter((e) => e.id !== id) })),
     clearHistory: () => set({ resultHistory: [] }),
     settingsOpen: false,
-    setSettingsOpen: (open) => set({ settingsOpen: open }),
+    setSettingsOpen: (open) => set(open ? { settingsOpen: true } : { settingsOpen: false, settingsSection: null }),
+    settingsSection: null,
+    openSettings: (section) => set({ settingsOpen: true, settingsSection: section ?? null }),
     hostUrl: defaultHost(),
     apiKey: ENV_API_KEY,
     activeServerUrl: '',
@@ -1122,7 +1158,10 @@ export const useStore = create<AppState>((set, get) => {
             avatarId: parsed.avatarId || DEFAULT_AVATAR,
             avatarBackgroundId: (!parsed.avatarBackgroundId || (parsed.avatarBackgroundId === 'plain_white' && !parsed.bgDefaultBrightLoft)) ? DEFAULT_BACKGROUND : parsed.avatarBackgroundId,
             avatarPrompt: (parsed.avatarPrompt && (parsed.avatarPrompt.includes('delegate') || parsed.avatarPrompt.includes('AGY'))) ? parsed.avatarPrompt : 'You are Jarvis, the central AI orchestrator for this machine, equipped with autonomous sub-agents: Antigravity (AGY), Claude, and Hermes. When asked to perform any computer task, coding, browsing, terminal or file action, ALWAYS delegate to AGY, Claude, or Hermes using your tools.',
-            avatarVoice: parsed.avatarVoice || 'Kore'
+            avatarVoice: parsed.avatarVoice || 'Kore',
+            wakeHeyJarvis: parsed.wakeHeyJarvis === true,
+            wakeClap: parsed.wakeClap === true,
+            clapSensitivity: ['less', 'normal', 'more'].includes(parsed.clapSensitivity) ? parsed.clapSensitivity : 'normal',
           });
         }
       } catch (e) {}
@@ -1134,20 +1173,7 @@ export const useStore = create<AppState>((set, get) => {
         // The avatar always runs on the connected server (set on connect), never a separate one.
         const { avatarServerUrl: _ignored, ...rest } = settings;
         const next = { ...state, ...rest };
-        localStorage.setItem('JARVIS_SETTINGS', JSON.stringify({
-          hostUrl: next.hostUrl,
-          apiKey: next.apiKey,
-          appLanguage: next.appLanguage,
-          ttsServer: next.ttsServer,
-          cryptoWallet: next.cryptoWallet,
-          newsRssUrl: next.newsRssUrl,
-          avatarGender: next.avatarGender,
-          avatarId: next.avatarId,
-          avatarBackgroundId: next.avatarBackgroundId,
-          avatarPrompt: next.avatarPrompt,
-          avatarVoice: next.avatarVoice,
-          bgDefaultBrightLoft: true, // saved scenes are the user's choice from now on
-        }));
+        saveLocalSettings(next);
         return next;
       });
       // A different server or key: drop the current one and connect again.
@@ -1169,6 +1195,29 @@ export const useStore = create<AppState>((set, get) => {
     }
   };
 });
+
+/** This device's settings (localStorage JARVIS_SETTINGS; loadSettings reads them back). */
+function saveLocalSettings(next: AppState) {
+  try {
+    localStorage.setItem('JARVIS_SETTINGS', JSON.stringify({
+      hostUrl: next.hostUrl,
+      apiKey: next.apiKey,
+      appLanguage: next.appLanguage,
+      ttsServer: next.ttsServer,
+      cryptoWallet: next.cryptoWallet,
+      newsRssUrl: next.newsRssUrl,
+      avatarGender: next.avatarGender,
+      avatarId: next.avatarId,
+      avatarBackgroundId: next.avatarBackgroundId,
+      avatarPrompt: next.avatarPrompt,
+      avatarVoice: next.avatarVoice,
+      bgDefaultBrightLoft: true, // saved scenes are the user's choice from now on
+      wakeHeyJarvis: next.wakeHeyJarvis,
+      wakeClap: next.wakeClap,
+      clapSensitivity: next.clapSensitivity,
+    }));
+  } catch { /* storage blocked: the setting lasts this session */ }
+}
 
 // ── Results history ─────────────────────────────────────────────────────────
 // Every result card shown (agents, live avatar, Business…) is kept on this device so it can be
