@@ -124,7 +124,12 @@ export class GeminiLiveProvider {
       const client = this.createClient();
       
       const model = process.env.GEMINI_LIVE_MODEL || LIVE_MODEL;
-      this.session = await client.live.connect({
+      // The SDK's connect() waits for setupComplete: a socket Google closes before that leaves
+      // it pending forever, and with it `connecting`, so Live could never be turned on again.
+      // Closing before then ends the attempt.
+      let closedBeforeReady = () => {};
+      const closedEarly = new Promise((resolve) => { closedBeforeReady = resolve; });
+      const opening = client.live.connect({
         model,
         config: {
           responseModalities: [Modality.AUDIO],
@@ -293,9 +298,13 @@ export class GeminiLiveProvider {
             console.log(closeMsg);
             this.broadcastLog(closeMsg);
             this.session = null;
+            closedBeforeReady();
           }
         }
       });
+      const session = await Promise.race([opening, closedEarly]);
+      if (session) this.session = session;
+      else opening.then((late) => { try { late?.close(); } catch {} }, () => {});
     } catch (err) {
       console.error('[GEMINI] Connection failed:', err.message);
       this.broadcastLog(`[GEMINI] Connection failed: ${err.message}`);

@@ -56,3 +56,27 @@ test('show_business_dashboard: declared, opens the card, Gemini speaks the overv
   assert.deepEqual(shown, ['Acme']);
   assert.deepEqual(responses[0].functionResponses, [{ id: 'b1', name: 'show_business_dashboard', response: { result: 'Acme is thriving.' } }]);
 });
+
+test('Google closes the socket before setup completes (live.connect never settles): Live can be turned on again', async () => {
+  let opened = 0;
+  const createClient = () => ({
+    live: {
+      connect: (o) => {
+        opened += 1;
+        if (opened === 1) {
+          o.callbacks.onopen();
+          setTimeout(() => o.callbacks.onclose({ code: 1008, reason: 'BidiGenerateContent session not found' }), 1);
+          return new Promise(() => {});
+        }
+        return Promise.resolve({ close() {} });
+      },
+    },
+  });
+  const p = new GeminiLiveProvider({ createClient, broadcast() {}, broadcastLog() {}, broadcastNotification() {}, broadcastAgentStatus() {} });
+  await Promise.race([p.connect('agy'), new Promise((r) => setTimeout(r, 200))]);
+  assert.equal(p.connecting, false);
+  assert.equal(p.session, null);
+  await p.connect('agy');
+  assert.equal(opened, 2);
+  assert.ok(p.session);
+});
