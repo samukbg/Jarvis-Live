@@ -4,6 +4,17 @@ import { getCrossPlatformEnv, getCrossPlatformCommand, getSpawnOptions, escapeAr
 // Voice delegations stop after this long (agy --print-timeout) and say so.
 const VOICE_TIMEOUT_S = Number(process.env.JARVIS_VOICE_AGENT_TIMEOUT_S) || 240;
 
+/** What a voice delegation says when agy ended without an answer. */
+export function emptyAnswerMessage(elapsedMs, stderr = '', timeoutS = VOICE_TIMEOUT_S) {
+  if (elapsedMs >= (timeoutS - 5) * 1000) {
+    return `The agent did not finish within ${Math.round(timeoutS / 60)} minutes and was stopped. Suggest a smaller task.`;
+  }
+  const reason = String(stderr).split('\n').map((l) => l.replace(/^error:\s*/i, '').trim()).filter(Boolean).pop();
+  return reason
+    ? `Antigravity stopped without an answer: ${reason.slice(0, 300)}`
+    : 'Antigravity stopped without an answer. Try again, or pick another agent.';
+}
+
 export class AgyWorker {
   constructor(context) {
     this.id = 'agy';
@@ -65,6 +76,8 @@ export class AgyWorker {
       proc.stdin?.end();
 
       let output = '';
+      let stderr = '';
+      const startedAt = Date.now();
       proc.stdout.on('data', (data) => {
         const chunk = data.toString();
         output += chunk;
@@ -73,7 +86,10 @@ export class AgyWorker {
       
       proc.stderr.on('data', (data) => {
         const line = data.toString().trim();
-        if (line) this.ctx.broadcastLog(`[GEMINI][err] ${line}`);
+        if (!line) return;
+        stderr += (stderr ? '\n' : '') + line;
+        console.error(`[AGY STDERR] ${line}`);
+        this.ctx.broadcastLog(`[GEMINI][err] ${line}`);
       });
       
       proc.on('close', (code) => {
@@ -91,8 +107,10 @@ export class AgyWorker {
 
         let result = output;
         if (voice && !output.trim()) {
-          // --print-timeout ends with exit 0 and no answer.
-          result = `The agent did not finish within ${Math.round(VOICE_TIMEOUT_S / 60)} minutes and was stopped. Suggest a smaller task.`;
+          // --print-timeout ends with exit 0 and no answer; an agy that fails at once (quota,
+          // sign-in, network) also exits 0 with nothing on stdout — say what it reported.
+          result = emptyAnswerMessage(Date.now() - startedAt, stderr);
+          console.log(`[GEMINI] No answer from agy: ${result}`);
           this.ctx.broadcastAgentStatus('agy', 'IDLE');
           return resolve(result);
         }

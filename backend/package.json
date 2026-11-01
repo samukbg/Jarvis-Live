@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-force-exit business/*.test.js calendar/*.test.js cards/*.test.js device/*.test.js shared/*.test.js system/*.test.js agents/*.test.js conversation/*.test.js conversation/providers/*.test.js avatar/*.test.js tts/*.test.js"
+    "test": "node --test --test-force-exit business/*.test.js calendar/*.test.js cards/*.test.js device/*.test.js shared/*.test.js system/*.test.js agents/*.test.js conversation/*.test.js conversation/providers/*.test.js avatar/*.test.js tts/*.test.js hermes/workers/*.test.js"
   },
   "dependencies": {
     "@google/genai": "^2.13.0",

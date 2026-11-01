@@ -2001,7 +2001,12 @@ User: ${command}`;
             ['vision', 'stark', 'athena', 'veronica', 'odin', 'ultron', 'friday', 'steve'].forEach(a => {
               broadcastAgentStatus(a, 'IDLE');
             });
-            if (code !== 0 && !output.trim()) {
+            // Stopped for a newer request (cancelActiveCommands): not an error, and no answer.
+            if (proc.killedByUser) {
+              const err = new Error('Cancelled');
+              err.cancelled = true;
+              reject(err);
+            } else if (code !== 0 && !output.trim()) {
               reject(new Error(`Agent execution failed with exit code ${code}${stderrOutput ? `: ${stderrOutput}` : ''}`));
             } else {
               resolve();
@@ -2048,6 +2053,10 @@ User: ${command}`;
       }
       return "Agent failed to execute or did not return output.";
   } catch (e) {
+    if (e.cancelled) {
+      broadcastLog('[SYSTEM] Previous command cancelled');
+      return 'Cancelled';
+    }
     broadcastAlert(`JARVIS error: ${e.message}`);
     broadcastAgentStatus('jarvis', 'IDLE');
     return `Agent execution failed: ${e.message}`;
