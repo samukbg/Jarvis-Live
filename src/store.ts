@@ -942,7 +942,7 @@ export const useStore = create<AppState>((set, get) => {
     }
   },
   geminiLiveMode: true,
-  liveVoiceProvider: 'lfm',
+  liveVoiceProvider: 'gemini', // an older Jarvis Server never says: Gemini Live
   setLiveVoiceProvider: (provider) => set({ liveVoiceProvider: provider }),
   setGeminiLiveMode: (enabled: boolean) => {
       set({ geminiLiveMode: enabled });

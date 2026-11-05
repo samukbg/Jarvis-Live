@@ -50,11 +50,7 @@ goto :streamer_done
 echo ^> streamer_win_env is not installed - live avatar off on this machine.
 :streamer_done
 
-rem 2d. Start Liquid AI LFM Realtime Voice (Port 9931) if model exists
-if exist models\lfm\LFM3-Audio-2B-Q4_K_M.gguf (
-    echo ^> Starting Liquid AI LFM Realtime Voice Engine (Port 9931)...
-    start /B cmd /c "llama-server -m models\lfm\LFM3-Audio-2B-Q4_K_M.gguf -mm models\lfm\mmproj-LFM3-Audio-2B-Q8_0.gguf --host 127.0.0.1 --port 9931 --jinja > lfm.log 2>&1"
-)
+rem 2d. The LFM voice (llama-server, port 9931) is started by the backend itself: backend\voice\lfmRuntime.js.
 
 rem 3. Start Orchestration Backend (Node.js)
 echo ^> Activating Neural Orchestrator (Port 4000)...

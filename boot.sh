@@ -39,13 +39,16 @@ else
   warn "Speech-to-text off (see README → Voice: python -m venv voice_engine/venv)."
 fi
 
-# Liquid AI LFM Realtime Voice (optional, local llama.cpp)
-if [ -f models/lfm/LFM3-Audio-2B-Q4_K_M.gguf ] || [ -f ../jarvis/scratch/lfm/LFM3-Audio-2B-Q4_K_M.gguf ]; then
+# Liquid AI LFM Realtime Voice (local llama.cpp, port 9931). Started here when the model and
+# llama-server are already on disk/PATH; otherwise the backend downloads and starts it itself
+# (backend/voice/lfmRuntime.js) and reuses a llama-server already answering on the port.
+if { [ -f models/lfm/LFM3-Audio-2B-Q4_K_M.gguf ] || [ -f scratch/lfm/LFM3-Audio-2B-Q4_K_M.gguf ]; } \
+  && { command -v llama-server >/dev/null 2>&1 || command -v llama >/dev/null 2>&1; }; then
   say "Starting Liquid AI LFM Realtime Voice Engine (port 9931)..."
   ./scripts/start_lfm.sh > lfm.log 2>&1 &
   PIDS+=($!)
 else
-  warn "LFM Realtime model not downloaded (see ./scripts/setup_lfm.sh)."
+  say "LFM voice: the backend downloads (about 1.4 GB) and starts it on first Live use."
 fi
 
 # Live avatar (optional, needs an NVIDIA GPU)

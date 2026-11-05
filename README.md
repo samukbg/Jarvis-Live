@@ -53,6 +53,7 @@ Most "AI assistants" are a chat box. Jarvis Live is an **AI operating layer for 
 ## ✨ Features
 
 ### Voice
+- **Live voice (LFM3-Audio), the default, on your own computer**: Liquid AI's [LFM3-Audio-2B](https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF) (Q4_K_M) in llama.cpp's `llama-server` (build b11960, OpenAI Realtime protocol on port 9931). The backend downloads both (about 1.4 GB) the first time you start Live and runs the server itself. English only. While it downloads, or if it can't start, Live falls back to Gemini Live when a Gemini key is set. Already run your own LFM server? Point Settings → Live Voice at it (`LFM_REALTIME_URL`).
 - **Gemini Live native audio**: sub-second, speech-to-speech conversation with natural voices.
 - **Or OpenAI Realtime** (`gpt-realtime-2.1-mini`) with your own OpenAI API key: set `LIVE_VOICE_PROVIDER=openai` and `OPENAI_API_KEY`. Same tools (agents, phone actions, cards), plus a web-search tool.
 - **Barge-in**: talk over Jarvis and it yields, like a real conversation.
@@ -283,7 +284,8 @@ Everything lives in `.env` (see [`.env.example`](.env.example)); every setting i
 | :-- | :-- |
 | `API_KEY` | Key every client must send. If unset, a random one is generated and printed at startup |
 | `GEMINI_API_KEY` | Gemini Live voice and the avatar's conversation engine |
-| `LIVE_VOICE_PROVIDER`, `OPENAI_API_KEY` | `openai` + your OpenAI key: the orb's live voice through OpenAI Realtime instead of Gemini Live (`OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE` optional) |
+| `LFM_REALTIME_URL`, `LFM_API_KEY` | Your own LFM3-Audio Realtime server (`ws://…/v1/realtime`, optional Bearer key) instead of the one Jarvis downloads and starts on this computer |
+| `LIVE_VOICE_PROVIDER`, `OPENAI_API_KEY` | `lfm` (default), `gemini`, or `openai` + your OpenAI key: the orb's live voice through LFM3-Audio, Gemini Live or OpenAI Realtime (`OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE` optional) |
 | `OLLAMA_SERVERS` | Comma-separated Ollama URLs (default `http://localhost:11434`) |
 | `STREAMER_URL` | Live-avatar streamer (default: this machine) |
 | `STT_URL` | RealtimeSTT server (default `ws://localhost:8001`) |
@@ -300,7 +302,7 @@ Everything lives in `.env` (see [`.env.example`](.env.example)); every setting i
 Yes. The Jarvis code is MIT-licensed. You pay only for the APIs you choose (the Gemini API has a free tier), or run models locally with Ollama.
 
 **Can it run fully offline?**
-The agents (Hermes + Ollama), speech-to-text and the avatar renderer all run locally. Real-time voice uses Gemini Live today; a fully local voice pipeline is on the roadmap.
+The agents (Hermes + Ollama), speech-to-text and the avatar renderer all run locally. Real-time voice runs locally too with the default LFM3-Audio voice (English only); Gemini Live and OpenAI Realtime are cloud options.
 
 **Do I need a GPU?**
 Only for the live avatar. Voice, agents, cards and the neural map run on any laptop, including Apple Silicon Macs.
@@ -325,6 +327,8 @@ Ideas and PRs are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
 The Jarvis Live code is released under the **[MIT License](LICENSE)**.
 
 The live-avatar engine in [`live_avatar/`](live_avatar) is a modified copy of [AVTR-1](https://github.com/avaturn-live/avtr-1) by Goodsize Inc. and keeps **its own licenses**: the streamer and renderer are under PolyForm Noncommercial 1.0.0 and the model weights under the AVTR-1 Community License (see [`live_avatar/LICENSE.md`](live_avatar/LICENSE.md)). Commercial use of the avatar requires a license from its authors.
+
+The LFM3-Audio voice model, downloaded on first use, is not part of this repository: it is under Liquid AI's **LFM Open License v1.0** (free to use for organizations under $10M in annual revenue).
 
 ## 🙏 Acknowledgements
 

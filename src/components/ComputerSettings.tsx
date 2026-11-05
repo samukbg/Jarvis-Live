@@ -120,9 +120,19 @@ const AvatarServerForm: React.FC<{ source: AvatarSource; onSaved: (s: AvatarSour
   );
 };
 
+/** This computer's LFM voice model (backend/voice/lfmRuntime.js). */
+interface LfmLocal {
+  state: 'idle' | 'missing' | 'downloading' | 'starting' | 'ready' | 'error';
+  progress: number | null;
+  error: string | null;
+  external: boolean;
+  installed: boolean;
+}
+
 interface VoiceStatus {
-  provider: VoiceProvider;
-  source: 'own' | 'local' | 'none';
+  /** The live voice the orb uses: LFM (this computer or your own server), Gemini Live or OpenAI Realtime (own keys). */
+  provider?: VoiceProvider;
+  source: 'own' | 'none' | 'local' | 'custom';
   hasOwnKey: boolean;
   hasOpenAIKey: boolean;
   openaiModel?: string;
@@ -130,9 +140,42 @@ interface VoiceStatus {
   lfmUrl?: string;
   customLfmUrl?: string;
   hasLfmKey?: boolean;
+  lfm?: LfmLocal;
   cloudLinked: boolean;
   machine: boolean;
 }
+
+/** The LFM model on this computer: downloaded on first use (~1.4 GB), then started with Jarvis. */
+const LfmLocalCard: React.FC<{ lfm: LfmLocal; saving: boolean; onInstall: () => void }> = ({ lfm, saving, onInstall }) => {
+  const pct = lfm.progress != null ? Math.round(lfm.progress * 100) : null;
+  const text = lfm.state === 'ready' ? (lfm.external ? 'Running on this computer (your own llama-server on port 9931).' : 'Ready on this computer.')
+    : lfm.state === 'downloading' ? `Downloading the voice model${pct != null ? ` — ${pct}%` : '…'}`
+    : lfm.state === 'starting' ? 'Starting the voice model…'
+    : lfm.state === 'error' ? `The voice model couldn't start: ${lfm.error || 'unknown error'}`
+    : lfm.installed ? 'Downloaded. It starts with Live voice.'
+    : 'Not downloaded yet (about 1.4 GB). It downloads when you first start Live voice, or now.';
+  return (
+    <div className="rounded-[14px] border border-stroke bg-surface-raised/30 p-3.5">
+      <div className="flex items-center gap-2.5">
+        {lfm.state === 'ready' ? <Check size={16} style={{ color: palette.success }} />
+          : lfm.state === 'downloading' || lfm.state === 'starting' ? <Loader2 size={16} className="animate-spin" style={{ color: palette.accent }} />
+          : <Mic size={16} style={{ color: lfm.state === 'error' ? palette.warning : palette.textTertiary }} />}
+        <span className="t-subhead" style={{ color: palette.textSecondary }}>This computer</span>
+      </div>
+      <p className="mt-1 t-footnote" style={{ color: palette.textTertiary }}>{text}</p>
+      {lfm.state === 'downloading' && pct != null && (
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ background: alpha(palette.accent, 20) }}>
+          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: palette.accent }} />
+        </div>
+      )}
+      {(lfm.state === 'error' || (!lfm.installed && lfm.state !== 'downloading' && lfm.state !== 'starting' && lfm.state !== 'ready')) && (
+        <div className="mt-2.5 flex justify-end">
+          <Button onClick={onInstall} disabled={saving}>{lfm.state === 'error' ? 'Try again' : 'Download voice model'}</Button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 type VoiceProvider = 'lfm' | 'gemini' | 'openai';
 
@@ -144,14 +187,26 @@ export const VoiceSection: React.FC<{ open: boolean }> = ({ open }) => {
 };
 
 const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => void; base: string }> = ({ voice, onSaved, base }) => {
-  const provider: VoiceProvider = voice.provider || 'lfm';
+  // An older Jarvis Server doesn't say: it has Gemini Live only.
+  const provider: VoiceProvider = voice.provider || 'gemini';
   const [tab, setTab] = useState<VoiceProvider>(provider);
   const [key, setKey] = useState('');
   const [lfmUrl, setLfmUrl] = useState(voice.customLfmUrl || '');
   const [lfmKey, setLfmKey] = useState('');
-  const [showAdvancedLfm, setShowAdvancedLfm] = useState(!voice.cloudLinked);
+  const [showAdvancedLfm, setShowAdvancedLfm] = useState(!!voice.customLfmUrl);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // While the model downloads or starts: its progress, every 1.5 s.
+  const busy = voice.lfm?.state === 'downloading' || voice.lfm?.state === 'starting';
+  useEffect(() => {
+    if (!busy) return undefined;
+    const t = setInterval(() => {
+      fetch(`${base}/api/voice/status`, { headers: { 'x-api-key': API_KEY } })
+        .then((r) => (r.ok ? r.json() : null)).then((v) => { if (v) onSaved(v); }).catch(() => {});
+    }, 1500);
+    return () => clearInterval(t);
+  }, [busy, base, onSaved]);
 
   const post = async (path: string, body: object): Promise<VoiceStatus | null> => {
     const r = await fetch(`${base}${path}`, {
@@ -191,7 +246,7 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
   const use = (p: VoiceProvider) => run(() => post('/api/voice/provider', { provider: p }));
 
   const label = provider === 'lfm'
-    ? (voice.cloudLinked ? 'Jarvis Cloud (LFM)' : 'Local LFM (llama.cpp)')
+    ? (voice.customLfmUrl ? 'Your LFM server' : 'This computer (LFM)')
     : provider === 'openai' ? 'OpenAI Realtime'
     : voice.source === 'own' ? 'Your Gemini key' : 'Not set up';
   const warn = provider === 'gemini' && voice.source === 'none';
@@ -215,35 +270,28 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
               <Mic size={20} />
             </div>
             <p className="t-footnote flex-1" style={{ color: palette.textTertiary }}>
-              {voice.cloudLinked
-                ? 'The orb talks through Liquid AI’s LFM3-Audio Realtime model routed to Jarvis Cloud GPU machines. Ultra-low latency conversational voice with native task delegation.'
-                : 'The orb talks through Liquid AI’s LFM3-Audio Realtime model running locally on this machine via llama.cpp (port 9931). Ultra-low latency conversational voice with native task delegation and complete local privacy.'}
+              The orb talks through Liquid AI’s LFM3-Audio model on this computer: your voice stays here. English only; it hands tasks to your agents.
             </p>
           </div>
 
-          {voice.cloudLinked && (
-            <div className="rounded-[14px] border border-stroke bg-surface-raised/40 p-3.5">
-              <div className="flex items-center gap-2.5">
-                <Check size={16} style={{ color: palette.success }} />
-                <span className="t-subhead" style={{ color: palette.textSecondary }}>Jarvis Cloud Connected</span>
-              </div>
-              <p className="mt-1 t-footnote" style={{ color: palette.textTertiary }}>
-                LFM Realtime runs on your linked Jarvis Cloud GPU fleet with zero configuration required.
-              </p>
-              <div className="mt-2.5">
-                <button
-                  type="button"
-                  onClick={() => setShowAdvancedLfm(!showAdvancedLfm)}
-                  className="t-footnote underline transition-colors hover:text-text"
-                  style={{ color: palette.textTertiary }}
-                >
-                  {showAdvancedLfm ? 'Hide custom local server settings' : 'Or connect to a custom local server…'}
-                </button>
-              </div>
+          {voice.lfm && !voice.customLfmUrl && (
+            <LfmLocalCard lfm={voice.lfm} saving={saving} onInstall={() => run(() => post('/api/voice/lfm/install', {}))} />
+          )}
+
+          {!showAdvancedLfm && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowAdvancedLfm(!showAdvancedLfm)}
+                className="t-footnote underline transition-colors hover:text-text"
+                style={{ color: palette.textTertiary }}
+              >
+                Use your own LFM server instead…
+              </button>
             </div>
           )}
 
-          {(showAdvancedLfm || !voice.cloudLinked) && (
+          {showAdvancedLfm && (
             <div className="flex flex-col gap-2.5 rounded-[14px] border border-stroke bg-surface-raised/30 p-3.5">
               <label className="flex flex-col gap-1">
                 <span className="t-caption" style={{ color: palette.textSecondary }}>LFM Server WebSocket URL</span>

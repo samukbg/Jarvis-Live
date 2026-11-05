@@ -47,6 +47,7 @@ import { BUSINESS_PROMPT, BUSINESS_TOOL } from './business/card.js';
 import { GeminiLiveProvider } from './conversation/providers/GeminiLiveProvider.js';
 import { OpenAIRealtimeProvider } from './conversation/providers/OpenAIRealtimeProvider.js';
 import { LFMRealtimeProvider, DEFAULT_LFM_MODEL, DEFAULT_LOCAL_URL } from './conversation/providers/LFMRealtimeProvider.js';
+import { createLfmRuntime } from './voice/lfmRuntime.js';
 import { PhoneBridge, PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from './device/phoneActions.js';
 import { isAuthorized, requestKey } from './shared/auth.js';
 import { callbackUrl, createAvatarSource, lanAddress } from './avatar/avatarSource.js';
@@ -110,7 +111,7 @@ function broadcastAudioChunk(pcmBuffer) {
   const header = Buffer.alloc(12);
   header.write('AUDO', 0, 4, 'ascii');
   header.writeUInt32BE(audioSeqOut++, 4);
-  header.writeUInt32BE(Date.now() & 0xFFFFFFFF, 8);
+  header.writeUInt32BE(Date.now() >>> 0, 8); // low 32 bits, unsigned (& gave a negative number half the time)
   const binaryPacket = Buffer.concat([header, pcmBuffer]);
   voiceTargets().forEach(c => {
     if (c.readyState === WebSocket.OPEN) {
@@ -125,7 +126,7 @@ function broadcastVideoFrame(frameBuffer) {
   const header = Buffer.alloc(12);
   header.write('VIDO', 0, 4, 'ascii');
   header.writeUInt32BE(videoSeqOut++, 4);
-  header.writeUInt32BE(Date.now() & 0xFFFFFFFF, 8);
+  header.writeUInt32BE(Date.now() >>> 0, 8); // low 32 bits, unsigned (& gave a negative number half the time)
   const binaryPacket = Buffer.concat([header, frameBuffer]);
   clients.forEach(c => {
     if (c.readyState === WebSocket.OPEN) {
@@ -1165,6 +1166,7 @@ function handleClientMessage(ws, message, isBinary) {
       const data = JSON.parse(message);
       if (data.type === 'set_gemini_live_mode') {
         geminiLiveMode = data.enabled;
+        lfmFallback = false; // LFM is tried again each time Live starts
         console.log(`[STATE] Gemini Live Mode: ${geminiLiveMode}`);
         broadcastLog(`[SYSTEM] Gemini Live Mode ${geminiLiveMode ? 'ENABLED' : 'DISABLED'}`);
         syncGeminiLiveState();
@@ -1727,13 +1729,64 @@ const geminiLiveProvider = new GeminiLiveProvider({ ...liveVoiceOptions, createC
 // The third live voice: OpenAI Realtime (gpt-realtime-2.1-mini) with your own OpenAI key —
 // LIVE_VOICE_PROVIDER=openai and OPENAI_API_KEY in .env.
 const openaiRealtimeProvider = new OpenAIRealtimeProvider(liveVoiceOptions);
-// The primary default live voice: Liquid AI LFM3-Audio Realtime (local or Jarvis Cloud).
+// llama-server + LFM3-Audio on this computer (voice/lfmRuntime.js): downloaded when first
+// needed (~1.4 GB), then started with the server.
+const lfmRuntime = createLfmRuntime({
+  home: process.env.JARVIS_HOME || path.resolve(__dirname, '..'),
+  repoRoot: path.resolve(__dirname, '..'),
+  log: (line) => console.log(line),
+});
+let lfmStatusSent = 0;
+lfmRuntime.onChange((st) => {
+  // Download progress: a few updates a second at most reach the apps.
+  if (st.state === 'downloading' && Date.now() - lfmStatusSent < 1000) return;
+  lfmStatusSent = Date.now();
+  broadcast({ type: 'lfm_status', ...lfmStatusView() });
+  // Live waits for the model (no other voice to use meanwhile): it starts once it's ready.
+  if (st.state === 'ready' && geminiLiveMode && liveVoice() === lfmRealtimeProvider && !lfmRealtimeProvider.session) lfmRealtimeProvider.connect(activeModel);
+});
+const lfmStatusView = () => {
+  const st = lfmRuntime.status();
+  return { state: st.state, progress: st.progress, bytes: st.bytes, totalBytes: st.totalBytes, error: st.error, external: st.external, installed: lfmRuntime.installed() };
+};
+
+/** Gemini Live can run here: your own key. */
+const geminiAvailable = () => !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+/** LFM couldn't be reached when Live started: Gemini Live has this Live session. */
+let lfmFallback = false;
+
+/**
+ * Where the LFM voice runs: your own server (Settings → Voice → LFM), else this computer.
+ * Throws (e.fallback) when none is ready; the model download then goes on in the background.
+ */
+async function lfmEndpoint() {
+  const key = process.env.LFM_API_KEY;
+  const headers = key ? { Authorization: `Bearer ${key}` } : {};
+  if (process.env.LFM_REALTIME_URL) return { url: process.env.LFM_REALTIME_URL, headers };
+  if (lfmRuntime.status().state === 'ready') return { url: lfmRuntime.status().url, headers };
+  if (lfmRuntime.installed()) {
+    broadcastNotification({ label: 'LFM REALTIME', msg: 'Starting the voice model…', kind: 'info' });
+    if (await lfmRuntime.ensure({ download: false })) return { url: lfmRuntime.status().url, headers };
+    throw Object.assign(new Error(`The LFM voice model couldn't start: ${lfmRuntime.status().error || 'unknown error'}`), { fallback: true });
+  }
+  lfmRuntime.ensure({ download: true });
+  throw Object.assign(new Error('Downloading the LFM voice model (about 1.4 GB) for this computer.'), { fallback: true, quiet: false });
+}
+
+// The primary default live voice: Liquid AI LFM3-Audio Realtime (this computer or your own server).
 const lfmRealtimeProvider = new LFMRealtimeProvider({
   ...liveVoiceOptions,
-  cloudLink: null,
-  fallbackToGemini: () => {
-    if (geminiLiveMode) {
-      geminiLiveProvider.connect(activeModel);
+  endpoint: lfmEndpoint,
+  onUnavailable: ({ message }) => {
+    if (!geminiLiveMode) return;
+    if (geminiAvailable()) {
+      lfmFallback = true;
+      broadcastNotification({ label: 'LIVE VOICE', msg: `${message} Using Gemini Live for now.`, kind: 'info' });
+      syncGeminiLiveState();
+    } else if (lfmRuntime.status().state === 'downloading' || lfmRuntime.status().state === 'starting') {
+      broadcastNotification({ label: 'LIVE VOICE', msg: `${message} Live voice starts when it's ready.`, kind: 'info' });
+    } else {
+      broadcastNotification({ label: 'LIVE VOICE', msg: `${message} Add a Gemini API key in Settings → Voice to use Gemini Live instead.`, kind: 'warn' });
     }
   },
 });
@@ -1758,7 +1811,7 @@ const useOpenAIVoice = () => activeVoiceProvider() === 'openai';
 const liveVoice = () => {
   const p = activeVoiceProvider();
   if (p === 'openai') return openaiRealtimeProvider;
-  if (p === 'gemini') return geminiLiveProvider;
+  if (p === 'gemini' || (lfmFallback && geminiAvailable())) return geminiLiveProvider;
   return lfmRealtimeProvider;
 };
 function handleGeminiCommand(command, source = 'text') {
@@ -2774,12 +2827,18 @@ const voiceView = () => {
     openaiModel: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1-mini',
     lfmModel: process.env.LFM_MODEL || DEFAULT_LFM_MODEL,
     lfmUrl: process.env.LFM_REALTIME_URL || DEFAULT_LOCAL_URL,
+    // This computer's model: missing / downloading (progress) / starting / ready / error.
+    lfm: lfmStatusView(),
+    // No Jarvis Cloud here: LFM runs on this computer (or your own server).
+    lfmCloud: false,
+    lfmFallback,
     cloudLinked: false,
     machine: false,
   };
 };
 
 function restartLiveVoice() {
+  lfmFallback = false;
   lfmRealtimeProvider.disconnect();
   geminiLiveProvider.disconnect();
   openaiRealtimeProvider.disconnect();
@@ -2841,6 +2900,12 @@ app.post('/api/voice/lfm', (req, res) => {
   }
 });
 
+// Settings → Voice → LFM: download and start the model on this computer now.
+app.post('/api/voice/lfm/install', (req, res) => {
+  lfmRuntime.ensure({ download: true });
+  res.json(voiceView());
+});
+
 app.post('/api/voice/provider', (req, res) => {
   const rawProvider = String(req.body?.provider || '').toLowerCase();
   let provider = 'lfm';
@@ -2868,4 +2933,8 @@ app.post('/api/voice/provider', (req, res) => {
 // ── Start ───────────────────────────────────────────────────────────────────
 server.listen(port, () => {
   console.log(`JARVIS Backend Online on port ${port}`);
+  if (activeVoiceProvider() === 'lfm' && !process.env.LFM_REALTIME_URL && lfmRuntime.installed()) {
+    // Downloaded before: started now, so the first Live session doesn't wait for it.
+    lfmRuntime.ensure({ download: false });
+  }
 });

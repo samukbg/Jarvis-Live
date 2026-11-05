@@ -5,6 +5,7 @@ import {
   LFMRealtimeProvider,
   resample24kTo16k,
   calculateRms,
+  spokenText,
   DEFAULT_LOCAL_URL,
 } from './LFMRealtimeProvider.js';
 
@@ -23,224 +24,281 @@ class FakeSocket extends EventEmitter {
   close() { this.readyState = 3; this.emit('close', 1000, 'normal'); }
   server(event) { this.emit('message', Buffer.from(JSON.stringify(event))); }
   types() { return this.sent.map((e) => e.type); }
+  last(type) { return this.sent.filter((e) => e.type === type).at(-1); }
+  clear() { this.sent = []; }
 }
 
 const tick = () => new Promise((r) => setImmediate(r));
+const loud = (ms) => { const b = Buffer.alloc(ms * 48); for (let i = 0; i < b.length; i += 2) b.writeInt16LE(i % 4 ? 2000 : -2000, i); return b; };
+const quiet = (ms) => Buffer.alloc(ms * 48);
 
 function provider(over = {}) {
-  const out = { messages: [], notes: [], audio: [], logs: [] };
+  const out = { messages: [], notes: [], audio: [], logs: [], delegated: [], unavailable: [], sessions: [] };
   const p = new LFMRealtimeProvider({
     WebSocketImpl: FakeSocket,
     broadcast: (m) => out.messages.push(m),
     broadcastAudioChunk: (b) => out.audio.push(b),
     broadcastLog: (l) => out.logs.push(l),
     broadcastNotification: (n) => out.notes.push(n),
-    broadcastAgentStatus: () => {},
-    delegateToAgent: async (task) => `Executed: ${task}`,
+    delegateToAgent: async (task) => { out.delegated.push(task); return `Executed: ${task}`; },
     search: async (q) => `Search results for ${q}`,
+    onUnavailable: (e) => out.unavailable.push(e.message),
+    onSession: (s) => out.sessions.push(s),
     ...over,
   });
   return { p, out };
 }
 
+/** A provider with an open session whose warm-up is done. */
 async function connected(over) {
   const r = provider(over);
   await r.p.connect('agy');
-  FakeSocket.last.open();
-  FakeSocket.last.server({ type: 'session.created', session: {} });
-  return { ...r, ws: FakeSocket.last };
+  const ws = FakeSocket.last;
+  ws.open();
+  ws.server({ type: 'session.updated', session: {} });
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } }); // warm-up
+  ws.clear();
+  return { ...r, ws };
 }
 
-test('resample24kTo16k: resamples 24kHz 16-bit PCM to 16kHz with exact 3:2 ratio', () => {
-  assert.equal(resample24kTo16k(null).length, 0);
-  assert.equal(resample24kTo16k(Buffer.alloc(0)).length, 0);
+const decision = (ws, output) => ws.server({ type: 'response.done', response: { status: 'completed', output } });
+const call = (name, args = {}, id = 'c1') => ({ type: 'function_call', name, arguments: JSON.stringify(args), call_id: id });
 
-  // 3 samples (6 bytes) of 24kHz -> 2 samples (4 bytes) of 16kHz
+test('resample24kTo16k: exact 3:2 ratio with linear interpolation', () => {
+  assert.equal(resample24kTo16k(null).length, 0);
   const inBuf = Buffer.alloc(6);
   inBuf.writeInt16LE(1000, 0);
   inBuf.writeInt16LE(2000, 2);
   inBuf.writeInt16LE(3000, 4);
-
   const outBuf = resample24kTo16k(inBuf);
   assert.equal(outBuf.length, 4);
-  assert.equal(outBuf.readInt16LE(0), 1000); // sample 0: srcIdx = 0
-  assert.equal(outBuf.readInt16LE(2), 2500); // sample 1: srcIdx = 1.5, avg of 2000 and 3000
+  assert.equal(outBuf.readInt16LE(0), 1000);
+  assert.equal(outBuf.readInt16LE(2), 2500);
 });
 
-test('calculateRms: computes correct RMS energy for audio frames', () => {
-  assert.equal(calculateRms(null), 0);
+test('calculateRms', () => {
   assert.equal(calculateRms(Buffer.alloc(0)), 0);
-
   const buf = Buffer.alloc(4);
   buf.writeInt16LE(300, 0);
   buf.writeInt16LE(400, 2);
-  // sqrt((90000 + 160000) / 2) = sqrt(125000) ≈ 353.55
   const rms = calculateRms(buf);
   assert.ok(rms > 350 && rms < 355);
 });
 
-test('connects and sends session.update with 16kHz input, 24kHz output, and tools', async () => {
-  const { ws, out } = await connected();
-  assert.equal(ws.url, DEFAULT_LOCAL_URL);
-  assert.equal(ws.sent[0].type, 'session.update');
-  const s = ws.sent[0].session;
-  assert.equal(s.type, 'realtime');
-  assert.equal(s.audio.input.format.rate, 16000);
-  assert.equal(s.audio.output.format.rate, 24000);
-  assert.ok(s.tools.length >= 4);
-  assert.ok(s.tools.some((t) => t.name === 'delegate_to_agy'));
-  assert.ok(out.notes.some((n) => n.msg.includes('LFM Realtime voice connected')));
+test('spokenText drops <think> blocks, closed or not', () => {
+  assert.equal(spokenText('<think>hmm</think> Hello there.'), 'Hello there.');
+  assert.equal(spokenText('Hi.<think>still thinking'), 'Hi.');
 });
 
-test('buffers audio during connection, resamples 24k->16k, and flushes on connect', async () => {
-  const { p } = provider();
+test('session: text decisions with reply_directly + the tools, 16 kHz in, then a warm-up', async () => {
+  const { p, out } = provider();
   await p.connect('agy');
   const ws = FakeSocket.last;
-
-  // 48 bytes at 24kHz = 1ms (24 samples) -> should resample to 32 bytes (16 samples)
-  const chunk24k = Buffer.alloc(48);
-  for (let i = 0; i < 24; i++) chunk24k.writeInt16LE(500, i * 2);
-
-  assert.equal(p.sendAudio(chunk24k), true);
-  assert.equal(ws.sent.length, 0); // Not sent yet because not open
-
+  assert.equal(ws.url, DEFAULT_LOCAL_URL);
   ws.open();
-  assert.deepEqual(ws.types(), ['session.update', 'input_audio_buffer.append']);
-  const app = ws.sent[1];
-  const decoded = Buffer.from(app.audio, 'base64');
-  assert.equal(decoded.length, 32); // Exact 16kHz resampled size
+  const s = ws.sent[0].session;
+  assert.deepEqual(s.output_modalities, ['text']);
+  assert.equal(s.audio.input.format.rate, 16000);
+  assert.equal(s.tools[0].name, 'reply_directly');
+  assert.ok(s.tools.some((t) => t.name === 'delegate_to_agy'));
+  assert.deepEqual(out.sessions, [{ cloud: false, remainingS: null }]);
+  ws.server({ type: 'session.updated', session: {} });
+  // Warm-up: a throwaway item and a 1-token text response.
+  assert.deepEqual(ws.types().slice(1), ['conversation.item.create', 'response.create']);
+  assert.equal(ws.last('response.create').response.max_output_tokens, 1);
+  assert.ok(out.notes.some((n) => n.msg === 'LFM voice connected'));
 });
 
-test('VAD: speech triggers speechActive; trailing silence commits turn and requests response', async () => {
+test('the endpoint comes from options (Cloud): url, headers and remaining minutes', async () => {
+  const { p, out } = provider({ endpoint: async () => ({ url: 'wss://gpu/api/voice/lfm/realtime', headers: { Authorization: 'Bearer t' }, cloud: true, remainingS: 600 }) });
+  await p.connect('agy');
+  assert.equal(FakeSocket.last.url, 'wss://gpu/api/voice/lfm/realtime');
+  assert.equal(FakeSocket.last.opts.headers.Authorization, 'Bearer t');
+  FakeSocket.last.open();
+  assert.deepEqual(out.sessions, [{ cloud: true, remainingS: 600 }]);
+});
+
+test('no endpoint: onUnavailable is called with the reason', async () => {
+  const { p, out } = provider({ endpoint: async () => { throw new Error('Downloading the voice model'); } });
+  await p.connect('agy');
+  assert.deepEqual(out.unavailable, ['Downloading the voice model']);
+  assert.equal(p.wanted, false);
+});
+
+test('turns: only speech is sent (with a lead-in); silence after it commits and asks for a text decision', async () => {
   const { p, ws } = await connected();
-
-  // Create loud frame (amplitude 1000, RMS 1000 > threshold 350)
-  // 48 bytes = 24 samples @ 24k = 1ms -> resampled to 32 bytes = 16 samples @ 16k
-  // To simulate 600ms of silence, we send silence chunks
-  const loudChunk = Buffer.alloc(4800); // 100ms
-  for (let i = 0; i < 2400; i++) loudChunk.writeInt16LE(1000, i * 2);
-
-  p.sendAudio(loudChunk);
-  assert.equal(p.speechActive, true);
-
-  // Send silence chunks exceeding 500ms
-  const silentChunk = Buffer.alloc(4800); // 100ms silence each
-  for (let i = 0; i < 6; i++) {
-    p.sendAudio(silentChunk);
-  }
-
-  assert.equal(p.speechActive, false);
+  for (let i = 0; i < 10; i++) p.sendAudio(quiet(40));
+  assert.equal(ws.sent.length, 0); // silence stays here
+  p.sendAudio(loud(80));
+  p.sendAudio(loud(80));
+  assert.equal(ws.sent[0].type, 'input_audio_buffer.clear');
+  assert.ok(ws.types().filter((t) => t === 'input_audio_buffer.append').length >= 3); // lead-in + speech
+  for (let i = 0; i < 6; i++) p.sendAudio(loud(40));
+  for (let i = 0; i < 16; i++) p.sendAudio(quiet(40));
   const types = ws.types();
   assert.ok(types.includes('input_audio_buffer.commit'));
-  assert.ok(types.includes('response.create'));
+  const rc = ws.last('response.create');
+  assert.deepEqual(rc.response.output_modalities, ['text']);
 });
 
-test('barge-in: speech while responding sends response.cancel and gemini_live_interrupt', async () => {
+test('a click (too short) is dropped, not committed', async () => {
+  const { p, ws } = await connected();
+  p.sendAudio(loud(130));
+  for (let i = 0; i < 16; i++) p.sendAudio(quiet(40));
+  assert.ok(!ws.types().includes('input_audio_buffer.commit'));
+  assert.equal(ws.last('input_audio_buffer.clear') !== undefined, true);
+});
+
+test('reply_directly: a function output, then a spoken (text + audio) response', async () => {
   const { p, ws, out } = await connected();
+  p.sendUserText('How are you?');
+  ws.clear();
+  decision(ws, [call('reply_directly')]);
+  await tick();
+  assert.equal(ws.sent[0].item.type, 'function_call_output');
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+  // The spoken reply: words as output_text, audio deltas played.
+  ws.server({ type: 'response.output_text.delta', delta: "I'm great" });
+  ws.server({ type: 'response.output_audio.delta', delta: Buffer.alloc(480).toString('base64'), item_id: 'i1' });
+  ws.server({ type: 'response.output_text.delta', delta: ', thanks!' });
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } });
+  assert.equal(out.audio.length, 1);
+  assert.ok(out.messages.some((m) => m.type === 'tts_chunk'));
+  const final = out.messages.find((m) => m.type === 'voice_transcript' && m.is_final);
+  assert.equal(final.text, "I'm great, thanks!");
+});
 
-  // Simulate assistant responding
-  ws.server({ type: 'response.created' });
-  assert.equal(p.responding, true);
+test('a plain text answer in a decision is stopped and spoken after a nudge', async () => {
+  const { p, ws } = await connected();
+  p.sendUserText('Thanks!');
+  ws.clear();
+  ws.server({ type: 'response.output_item.added', item: { type: 'message' } });
+  assert.equal(ws.sent[0].type, 'response.cancel');
+  ws.server({ type: 'response.done', response: { status: 'cancelled', output: [{ type: 'message' }] } });
+  assert.equal(ws.last('conversation.item.create').item.role, 'user');
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+});
 
-  // User speaks loudly
-  const loudChunk = Buffer.alloc(480);
-  for (let i = 0; i < 240; i++) loudChunk.writeInt16LE(1500, i * 2);
-  p.sendAudio(loudChunk);
+test('delegation: started at once, acknowledged out loud, the result spoken later', async () => {
+  const { p, ws, out } = await connected();
+  p.sendUserText('Open Spotify');
+  ws.clear();
+  decision(ws, [call('delegate_to_agy', { task: 'Open Spotify' })]);
+  await tick();
+  assert.deepEqual(out.delegated, ['Open Spotify']);
+  const fo = JSON.parse(ws.sent.find((e) => e.item?.type === 'function_call_output').item.output);
+  assert.equal(fo.status, 'started');
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+  // The ack finishes, then the agent's answer comes in.
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } });
+  await tick();
+  await tick();
+  const result = ws.sent.filter((e) => e.type === 'conversation.item.create').at(-1);
+  assert.match(result.item.content[0].text, /^\(Agent result\)/);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+});
 
+test('tools: show_card and search_web results go back, then a spoken answer', async () => {
+  const shown = [];
+  const { p, ws } = await connected({ showCard: async (a) => { shown.push(a); return { result: 'Paris 14°C' }; } });
+  p.sendUserText('Weather in Paris?');
+  ws.clear();
+  decision(ws, [call('show_card', { kind: 'weather', place: 'Paris' })]);
+  await tick();
+  await tick();
+  assert.equal(shown[0].place, 'Paris');
+  assert.match(ws.sent.find((e) => e.item?.type === 'function_call_output').item.output, /Paris 14/);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+});
+
+test('barge-in: speech during a spoken reply interrupts it; a decision is only cancelled', async () => {
+  const { p, ws, out } = await connected();
+  p.sendUserText('Tell me a story');
+  decision(ws, [call('reply_directly')]);
+  await tick();
+  ws.server({ type: 'response.output_audio.delta', delta: Buffer.alloc(48000).toString('base64'), item_id: 'i1' });
+  ws.clear();
+  p.sendAudio(loud(80));
+  p.sendAudio(loud(80));
   assert.ok(out.messages.some((m) => m.type === 'gemini_live_interrupt'));
   assert.ok(ws.types().includes('response.cancel'));
-});
 
-test('receives audio chunks and transcripts, sends status updates', async () => {
-  const { ws, out } = await connected();
-
-  const fakePcm24k = Buffer.from([10, 20, 30, 40]);
-  ws.server({
-    type: 'response.output_audio.delta',
-    delta: fakePcm24k.toString('base64'),
-    item_id: 'item_1',
-  });
-
-  assert.equal(out.audio.length, 1);
-  assert.deepEqual(out.audio[0], fakePcm24k);
-  assert.ok(out.messages.some((m) => m.type === 'tts_chunk' && m.content === fakePcm24k.toString('base64')));
-
-  ws.server({
-    type: 'response.output_audio_transcript.delta',
-    delta: 'Hello there',
-  });
-
-  assert.ok(out.messages.some((m) => m.type === 'voice_transcript' && m.text.includes('Hello there')));
-
-  ws.server({
-    type: 'response.done',
-    response: { output: [] },
-  });
-
-  assert.ok(out.messages.some((m) => m.type === 'agent_status' && m.status === 'IDLE'));
-});
-
-test('tool calling: executes delegate_to_agy in background and delivers result', async () => {
-  const { ws } = await connected();
-
-  ws.server({
-    type: 'response.done',
-    response: {
-      output: [
-        {
-          type: 'function_call',
-          call_id: 'call_123',
-          name: 'delegate_to_agy',
-          arguments: JSON.stringify({ task: 'Check system health' }),
-        },
-      ],
-    },
-  });
-
+  const b = await connected();
+  b.p.sendUserText('Open');
+  b.ws.clear();
+  b.p.sendAudio(loud(80));
+  b.p.sendAudio(loud(80));
+  assert.ok(b.ws.types().includes('response.cancel'));
+  assert.ok(!b.out.messages.some((m) => m.type === 'gemini_live_interrupt'));
+  // The cancelled decision's tool call never runs.
+  decision(b.ws, [call('delegate_to_agy', { task: 'Open' })]);
   await tick();
-  // Sent start confirmation
-  const fcOutput = ws.sent.find((e) => e.type === 'conversation.item.create' && e.item.call_id === 'call_123');
-  assert.ok(fcOutput);
-  assert.ok(fcOutput.item.output.includes('Running in background'));
-
-  // Wait for background execution to deliver result
-  await tick();
-  const agentResult = ws.sent.find((e) => e.type === 'conversation.item.create' && e.item.content?.[0]?.text?.includes('Executed: Check system health'));
-  assert.ok(agentResult);
+  assert.deepEqual(b.out.delegated, []);
 });
 
-test('tool calling: executes search_web and returns output', async () => {
-  const { ws } = await connected();
-
-  ws.server({
-    type: 'response.done',
-    response: {
-      output: [
-        {
-          type: 'function_call',
-          call_id: 'call_456',
-          name: 'search_web',
-          arguments: JSON.stringify({ query: 'weather tomorrow' }),
-        },
-      ],
-    },
-  });
-
+test('every response has an output cap (the server keeps generating after a disconnect)', async () => {
+  const { p, ws } = await connected();
+  p.sendUserText('Hi');
+  decision(ws, [call('reply_directly')]);
   await tick();
-  const searchOutput = ws.sent.find((e) => e.type === 'conversation.item.create' && e.item.call_id === 'call_456');
-  assert.ok(searchOutput);
-  assert.ok(searchOutput.item.output.includes('Search results for weather tomorrow'));
+  for (const rc of ws.sent.filter((e) => e.type === 'response.create')) assert.ok(rc.response.max_output_tokens > 0);
 });
 
-test('resolveEndpoint uses cloudLink when available', async () => {
-  const cloudLink = () => ({
-    creds: { token: 'cloud-token' },
-    lfmVoiceEndpoint: async () => ({ url: 'wss://cloud.jarvis.example/v1/realtime', token: 'bearer-token' }),
-  });
+test('a second request while one runs is queued, a new user turn wins over a pending reply', async () => {
+  const { p, ws } = await connected();
+  p.sendUserText('one');
+  p.sendUserText('two');
+  assert.equal(ws.sent.filter((e) => e.type === 'response.create').length, 1);
+  decision(ws, [call('reply_directly')]); // cancelled by 'two' → dropped, 'two' is decided
+  await tick();
+  const rc = ws.sent.filter((e) => e.type === 'response.create');
+  assert.equal(rc.length, 2);
+  assert.deepEqual(rc[1].response.output_modalities, ['text']);
+});
 
-  const { p } = provider({ cloudLink });
+test('images are not sent (no vision)', async () => {
+  const { p, ws } = await connected();
+  p.sendImage('image/jpeg', 'AAAA');
+  p.sendUserText('What do you see?');
+  assert.ok(!JSON.stringify(ws.sent).includes('input_image'));
+});
+
+test('a server never reached: one quick retry, then unavailable', async () => {
+  const { p, out } = provider();
   await p.connect('agy');
-  const ws = FakeSocket.last;
-  assert.equal(ws.url, 'wss://cloud.jarvis.example/v1/realtime');
-  assert.equal(ws.opts.headers.Authorization, 'Bearer bearer-token');
+  FakeSocket.last.emit('close', 1006, '');
+  assert.equal(out.unavailable.length, 0);
+  clearTimeout(p.retryTimer);
+  p.retryTimer = null;
+  await p.connect('agy');
+  FakeSocket.last.emit('close', 1006, '');
+  assert.equal(out.unavailable.length, 1);
+});
+
+test('a dropped session reconnects; after the retries it gives up and reports unavailable', async () => {
+  const { p, out } = provider();
+  await p.connect('agy');
+  FakeSocket.last.open();
+  for (let i = 0; i < 4; i++) {
+    const ws = FakeSocket.last;
+    ws.emit('close', 1006, '');
+    clearTimeout(p.retryTimer);
+    p.retryTimer = null;
+    if (i < 3) await p.connect('agy');
+  }
+  assert.equal(out.unavailable.length, 1);
+  assert.equal(p.wanted, false);
+});
+
+test('a Cloud session that ends (1008, token over) connects again for a new token', async () => {
+  let asked = 0;
+  const { p, out } = provider({ endpoint: async () => { asked += 1; return { url: 'wss://gpu/x', cloud: true }; } });
+  await p.connect('agy');
+  FakeSocket.last.open();
+  FakeSocket.last.emit('close', 1008, 'Jarvis Cloud voice session expired');
+  clearTimeout(p.retryTimer);
+  p.retryTimer = null;
+  await p.connect('agy');
+  assert.equal(asked, 2);
+  assert.deepEqual(out.unavailable, []);
 });
