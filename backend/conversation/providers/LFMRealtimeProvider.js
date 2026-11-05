@@ -37,6 +37,9 @@ const RESPONSE_START_MS = 20000;
 const DECIDE_TOKENS = 400; // a tool call with a detailed task fits
 const SPEAK_TOKENS = 2048; // text + audio codes of a few sentences
 const HISTORY_TURNS = 6;
+// A Cloud session holds one of a GPU's few LFM slots: closed after this long without talking,
+// opened again when the user speaks.
+const CLOUD_IDLE_MS = Number(process.env.LFM_CLOUD_IDLE_MS) || 90_000;
 
 /** Talking without a tool: in a text decision the 2B model always reaches for a tool, so it gets one. */
 export const REPLY_TOOL = {
@@ -127,6 +130,9 @@ export class LFMRealtimeProvider {
     this.history = [];
     this.dropped = false;
     this.targetAgent = 'agy';
+    this.parked = false; // an idle Cloud session closed on purpose (see park)
+    this.idleTimer = null;
+    this.delegations = 0; // agent tasks still running: their answer must be spoken
 
     // Responses: phase 'warmup' | 'decide' | 'speak' of the one in flight (the server runs one at a time).
     this.responding = null;
@@ -170,7 +176,7 @@ export class LFMRealtimeProvider {
    */
   sendAudio(pcm24k) {
     if (!this.wanted || !pcm24k || pcm24k.length < 2) return false;
-    if (!this.session && !this.connecting && !this.retryTimer) this.connect(this.targetAgent);
+    if (!this.session && !this.connecting && !this.retryTimer && !this.parked) this.connect(this.targetAgent);
     const pcm16 = resample24kTo16k(pcm24k);
     if (!pcm16.length) return false;
     const ms = pcm16.length / BYTES_PER_MS_16K;
@@ -195,6 +201,11 @@ export class LFMRealtimeProvider {
 
   startUtterance() {
     this.speechActive = true;
+    this.active();
+    if (this.parked) {
+      this.parked = false;
+      this.connect(this.targetAgent);
+    }
     this.silenceMs = 0;
     this.utteranceMs = this.prerollBytes / BYTES_PER_MS_16K;
     // The user talks over Jarvis: stop the reply (barge-in). A decision still running is for
@@ -395,6 +406,7 @@ export class LFMRealtimeProvider {
         this.announce = false;
         this.warmUp();
         this.flushPendingAudio();
+        this.active();
         break;
 
       case 'response.created':
@@ -443,6 +455,7 @@ export class LFMRealtimeProvider {
 
   onAudio(event) {
     if (!event.delta) return;
+    this.active();
     if (!this.speaking) {
       this.speaking = true;
       this.broadcast({ type: 'agent_status', agentId: this.targetAgent, status: 'THINKING', voice: true });
@@ -564,6 +577,7 @@ export class LFMRealtimeProvider {
       } else if (name === `delegate_to_${this.targetAgent}`) {
         const task = String(args.task || '');
         this.broadcastLog(`[LFM REALTIME] Delegating to ${this.targetAgent.toUpperCase()}: ${task}`);
+        this.delegations += 1;
         (async () => {
           let raw;
           try {
@@ -571,6 +585,7 @@ export class LFMRealtimeProvider {
           } catch (e) {
             raw = `The agent failed: ${e.message}`;
           }
+          this.delegations -= 1;
           const text = raw && raw.length > 5000 ? `${raw.substring(0, 5000)}... [TRUNCATED DUE TO LENGTH]` : raw;
           await sent;
           this.forSpeaker(() => this.deliverResult(task, text));
@@ -605,6 +620,7 @@ export class LFMRealtimeProvider {
   }
 
   deliverResult(task, resultText) {
+    this.active();
     if (!this.session) {
       console.log('[LFM REALTIME] No active session for agent answer (shown on screen only)');
       return;
@@ -618,6 +634,7 @@ export class LFMRealtimeProvider {
 
   sendUserText(text) {
     if (!this.session) return false;
+    this.active();
     if (this.responding || this.audioPlaying()) this.interrupt();
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
     this.remember('user', text);
@@ -625,8 +642,35 @@ export class LFMRealtimeProvider {
     return true;
   }
 
+  /** Talk happened: a Cloud session stays open CLOUD_IDLE_MS more. */
+  active() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    if (!this.cloud || !this.wanted) return;
+    this.idleTimer = setTimeout(() => this.forSpeaker(() => this.park()), CLOUD_IDLE_MS);
+    this.idleTimer.unref?.();
+  }
+
+  /** Closes an idle Cloud session (Live stays on): the next words open it again. */
+  park() {
+    this.idleTimer = null;
+    if (!this.session || !this.cloud) return;
+    if (this.delegations > 0 || this.responding || this.speechActive || this.audioPlaying()) return this.active();
+    console.log('[LFM] Idle: closing the Jarvis Cloud session until the user speaks');
+    this.parked = true;
+    const ws = this.ws;
+    this.ws = null;
+    this.session = null;
+    this.warmedUp = null;
+    this.endResponse();
+    try { ws?.close(); } catch {}
+  }
+
   disconnect() {
     this.wanted = false;
+    this.parked = false;
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
     this.retries = 0;

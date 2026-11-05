@@ -302,3 +302,40 @@ test('a Cloud session that ends (1008, token over) connects again for a new toke
   assert.equal(asked, 2);
   assert.deepEqual(out.unavailable, []);
 });
+
+test('an idle Cloud session is closed (Live stays on) and opens again when the user speaks', async () => {
+  const { p, ws } = await connected({ endpoint: async () => ({ url: 'wss://gpu/x', cloud: true }) });
+  p.park();
+  assert.equal(p.session, null);
+  assert.equal(p.parked, true);
+  assert.equal(ws.readyState, 3);
+  const before = FakeSocket.last;
+  for (let i = 0; i < 10; i++) p.sendAudio(quiet(40)); // silence doesn't reconnect
+  assert.equal(FakeSocket.last, before);
+  p.sendAudio(loud(80));
+  p.sendAudio(loud(80));
+  await tick();
+  assert.notEqual(FakeSocket.last, before); // speech does
+  assert.equal(p.parked, false);
+});
+
+test('a Cloud session is not parked while an agent task is running', async () => {
+  let finish;
+  const { p, ws } = await connected({
+    endpoint: async () => ({ url: 'wss://gpu/x', cloud: true }),
+    delegateToAgent: () => new Promise((r) => { finish = r; }),
+  });
+  p.sendUserText('Open Spotify');
+  decision(ws, [call('delegate_to_agy', { task: 'Open Spotify' })]);
+  await tick();
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } });
+  p.park();
+  assert.ok(p.session);
+  finish('done');
+});
+
+test('a local session is never parked', async () => {
+  const { p } = await connected();
+  p.park();
+  assert.ok(p.session);
+});
