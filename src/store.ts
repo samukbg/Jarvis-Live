@@ -169,6 +169,8 @@ interface AppState {
   sendBinaryMessage: (data: ArrayBuffer) => void;
   geminiLiveMode: boolean;
   setGeminiLiveMode: (enabled: boolean) => void;
+  liveVoiceProvider: 'lfm' | 'gemini' | 'openai';
+  setLiveVoiceProvider: (provider: 'lfm' | 'gemini' | 'openai') => void;
   cameraActive: boolean;
   toggleCamera: () => Promise<void>;
   screenActive: boolean;
@@ -346,6 +348,10 @@ export const useStore = create<AppState>((set, get) => {
               if (msg.selectedModels !== undefined) set({ selectedModels: msg.selectedModels });
               if (msg.geminiLiveMode !== undefined) set({ geminiLiveMode: msg.geminiLiveMode });
               if (msg.activeLanguage !== undefined) set({ language: msg.activeLanguage });
+              if (msg.liveVoiceProvider !== undefined) set({ liveVoiceProvider: msg.liveVoiceProvider });
+              break;
+            case 'live_voice_provider':
+              if (msg.provider !== undefined) set({ liveVoiceProvider: msg.provider });
               break;
             case 'log': get().addLog(msg.message); break;
             case 'wipe_logs': get().clearLogs(); break;
@@ -936,7 +942,9 @@ export const useStore = create<AppState>((set, get) => {
     }
   },
   geminiLiveMode: true,
-    setGeminiLiveMode: (enabled: boolean) => {
+  liveVoiceProvider: 'lfm',
+  setLiveVoiceProvider: (provider) => set({ liveVoiceProvider: provider }),
+  setGeminiLiveMode: (enabled: boolean) => {
       set({ geminiLiveMode: enabled });
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'set_gemini_live_mode', enabled }));
@@ -1251,3 +1259,10 @@ useStore.subscribe((state, prev) => {
   }
   if (state.resultHistory !== prev.resultHistory) saveHistory(state.resultHistory);
 });
+
+export function liveVoiceLabel(provider?: string): string {
+  if (provider === 'openai') return 'OpenAI Realtime';
+  if (provider === 'gemini') return 'Gemini Live';
+  return 'LFM Realtime';
+}
+

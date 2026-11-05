@@ -231,7 +231,8 @@ export class LFMRealtimeProvider {
 
   /** Resolves the target WebSocket endpoint (Cloud machine if cloud-linked, else local). */
   async resolveEndpoint() {
-    if (process.env.LFM_REALTIME_URL) return { url: process.env.LFM_REALTIME_URL, headers: {} };
+    const defaultHeaders = process.env.LFM_API_KEY ? { Authorization: `Bearer ${process.env.LFM_API_KEY}` } : {};
+    if (process.env.LFM_REALTIME_URL) return { url: process.env.LFM_REALTIME_URL, headers: defaultHeaders };
 
     // 1. If linked to Jarvis Cloud, try to get a cloud voice session
     if (this.cloudLink && typeof this.cloudLink === 'function') {
@@ -239,7 +240,7 @@ export class LFMRealtimeProvider {
       if (link?.creds && typeof link.lfmVoiceEndpoint === 'function') {
         try {
           const ep = await link.lfmVoiceEndpoint();
-          if (ep?.url) return { url: ep.url, headers: ep.token ? { Authorization: `Bearer ${ep.token}` } : {} };
+          if (ep?.url) return { url: ep.url, headers: ep.token ? { Authorization: `Bearer ${ep.token}` } : defaultHeaders };
         } catch (e) {
           console.warn('[LFM] Cloud endpoint retrieval error:', e.message);
         }
@@ -247,7 +248,7 @@ export class LFMRealtimeProvider {
     }
 
     // 2. Default to local llama serve endpoint
-    return { url: this.urlGetter(), headers: {} };
+    return { url: this.urlGetter(), headers: defaultHeaders };
   }
 
   async connect(targetAgent = 'agy') {

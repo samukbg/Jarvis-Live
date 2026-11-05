@@ -59,6 +59,7 @@ import { wslDistro, wslRoots } from './system/wslDistro.js';
 import { pickAvatar } from './avatar/pickAvatar.js';
 import { splitHermesModel } from './agents/hermesModel.js';
 import { GoogleGenAI, Modality } from '@google/genai';
+import { setEnvValue } from './system/envFile.js';
 
 
 // Removed hardcoded small talk JSON load
@@ -1120,7 +1121,7 @@ wss.on('connection', (ws) => {
   clients.add(ws);
   // Send initial state on connect
   sendInitialData(ws);
-  ws.send(JSON.stringify({ type: 'state_sync', activeModel, selectedModels, geminiLiveMode, activeLanguage }));
+  ws.send(JSON.stringify({ type: 'state_sync', activeModel, selectedModels, geminiLiveMode, activeLanguage, liveVoiceProvider: activeVoiceProvider() }));
 
   ws.on('message', (message, isBinary) => handleClientMessage(ws, message, isBinary));
   ws.on('close', () => { clients.delete(ws); phoneBridge.unregister(ws); if (voiceOwner === ws) voiceOwner = null; });
@@ -1323,7 +1324,7 @@ app.get('/api/watch/events', (req, res) => {
   const client = new WatchClient(res);
   watchSessions.set(id, client);
   clients.add(client);
-  client.send({ type: 'state_sync', activeModel, selectedModels, geminiLiveMode, activeLanguage });
+  client.send({ type: 'state_sync', activeModel, selectedModels, geminiLiveMode, activeLanguage, liveVoiceProvider: activeVoiceProvider() });
   // Keeps proxies (Cloudflare) from closing an idle stream.
   const ping = setInterval(() => client.send({ type: 'ping' }), 15000);
   req.on('close', () => {
@@ -1362,7 +1363,8 @@ async function sendInitialData(ws) {
       activeModel, 
       selectedModels, 
       geminiLiveMode, 
-      activeLanguage 
+      activeLanguage,
+      liveVoiceProvider: activeVoiceProvider(),
     }));
 
     // 2. Send latest feed
@@ -2763,10 +2765,12 @@ const voiceView = () => {
   return {
     provider: prov,
     source: prov === 'lfm'
-      ? 'local'
+      ? (process.env.LFM_REALTIME_URL ? 'custom' : 'local')
       : (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY ? 'own' : 'none'),
     hasOwnKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
     hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+    hasLfmKey: !!process.env.LFM_API_KEY,
+    customLfmUrl: process.env.LFM_REALTIME_URL || '',
     openaiModel: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1-mini',
     lfmModel: process.env.LFM_MODEL || DEFAULT_LFM_MODEL,
     lfmUrl: process.env.LFM_REALTIME_URL || DEFAULT_LOCAL_URL,
@@ -2786,6 +2790,57 @@ app.get('/api/voice/status', (req, res) => {
   res.json(voiceView());
 });
 
+app.post('/api/voice/key', (req, res) => {
+  try {
+    const key = String(req.body?.key ?? '').trim();
+    if (req.body?.kind === 'openai') {
+      if (key && !/^sk-[A-Za-z0-9_-]{20,}$/.test(key)) return res.status(400).json({ error: 'That doesn’t look like an OpenAI API key (sk-…).' });
+      setEnvValue(ENV_FILE, 'OPENAI_API_KEY', key);
+      if (key) process.env.OPENAI_API_KEY = key;
+      else delete process.env.OPENAI_API_KEY;
+      openaiRealtimeProvider.disconnect(); // the next session uses the new key
+      broadcastLog(key ? '[OPENAI] Voice: OpenAI API key saved' : '[OPENAI] Voice: OpenAI API key removed');
+      if (useOpenAIVoice() || !key) restartLiveVoice();
+      return res.json(voiceView());
+    }
+    setEnvValue(ENV_FILE, 'GEMINI_API_KEY', key);
+    if (key) process.env.GEMINI_API_KEY = key;
+    else { delete process.env.GEMINI_API_KEY; delete process.env.GOOGLE_API_KEY; }
+    geminiLiveProvider.disconnect(); // the next session uses the new key
+    broadcastLog(key ? '[GEMINI] Voice: your own Gemini API key' : '[GEMINI] Voice: removed Gemini API key');
+    res.json(voiceView());
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Configure custom local LFM Realtime endpoint / optional API key
+app.post('/api/voice/lfm', (req, res) => {
+  try {
+    const url = String(req.body?.url ?? '').trim();
+    const key = String(req.body?.key ?? '').trim();
+    if (url) {
+      setEnvValue(ENV_FILE, 'LFM_REALTIME_URL', url);
+      process.env.LFM_REALTIME_URL = url;
+    } else if (req.body?.resetUrl) {
+      delete process.env.LFM_REALTIME_URL;
+      setEnvValue(ENV_FILE, 'LFM_REALTIME_URL', '');
+    }
+    if (key) {
+      setEnvValue(ENV_FILE, 'LFM_API_KEY', key);
+      process.env.LFM_API_KEY = key;
+    } else if (req.body?.clearKey) {
+      delete process.env.LFM_API_KEY;
+      setEnvValue(ENV_FILE, 'LFM_API_KEY', '');
+    }
+    broadcastLog('[LFM] Voice settings saved');
+    restartLiveVoice();
+    res.json(voiceView());
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.post('/api/voice/provider', (req, res) => {
   const rawProvider = String(req.body?.provider || '').toLowerCase();
   let provider = 'lfm';
@@ -2798,9 +2853,11 @@ app.post('/api/voice/provider', (req, res) => {
     provider = 'lfm';
   }
   try {
+    setEnvValue(ENV_FILE, 'LIVE_VOICE_PROVIDER', provider);
     process.env.LIVE_VOICE_PROVIDER = provider;
     const label = provider === 'lfm' ? 'LFM Realtime (Default)' : provider === 'gemini' ? 'Gemini Live' : 'OpenAI Realtime';
     broadcastLog(`[VOICE] Live voice: ${label}`);
+    broadcast({ type: 'live_voice_provider', provider });
     restartLiveVoice();
     res.json(voiceView());
   } catch (e) {

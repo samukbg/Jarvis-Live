@@ -128,6 +128,10 @@ interface VoiceStatus {
   openaiModel?: string;
   lfmModel?: string;
   lfmUrl?: string;
+  customLfmUrl?: string;
+  hasLfmKey?: boolean;
+  cloudLinked: boolean;
+  machine: boolean;
 }
 
 type VoiceProvider = 'lfm' | 'gemini' | 'openai';
@@ -142,6 +146,10 @@ export const VoiceSection: React.FC<{ open: boolean }> = ({ open }) => {
 const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => void; base: string }> = ({ voice, onSaved, base }) => {
   const provider: VoiceProvider = voice.provider || 'lfm';
   const [tab, setTab] = useState<VoiceProvider>(provider);
+  const [key, setKey] = useState('');
+  const [lfmUrl, setLfmUrl] = useState(voice.customLfmUrl || '');
+  const [lfmKey, setLfmKey] = useState('');
+  const [showAdvancedLfm, setShowAdvancedLfm] = useState(!voice.cloudLinked);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -156,26 +164,44 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
     return d;
   };
 
-  const use = (p: VoiceProvider) => {
+  const run = async (steps: () => Promise<VoiceStatus | null>) => {
     setSaving(true);
     setError(null);
-    post('/api/voice/provider', { provider: p })
-      .then((v) => { if (v) onSaved(v); })
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setSaving(false));
+    try {
+      const v = await steps();
+      if (v) onSaved(v);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
 
+  const save = (value: string) => run(() => post('/api/voice/key', { key: value }));
+  const saveLfm = () => run(async () => post('/api/voice/lfm', { url: lfmUrl.trim(), key: lfmKey.trim() }));
+  const resetLfm = () => run(async () => {
+    setLfmUrl('');
+    return post('/api/voice/lfm', { resetUrl: true });
+  });
+
+  const saveOpenAI = (value: string) => run(async () => {
+    await post('/api/voice/key', { kind: 'openai', key: value });
+    return post('/api/voice/provider', { provider: 'openai' });
+  });
+  const use = (p: VoiceProvider) => run(() => post('/api/voice/provider', { provider: p }));
+
   const label = provider === 'lfm'
-    ? 'Local LFM (llama.cpp)'
+    ? (voice.cloudLinked ? 'Jarvis Cloud (LFM)' : 'Local LFM (llama.cpp)')
     : provider === 'openai' ? 'OpenAI Realtime'
     : voice.source === 'own' ? 'Your Gemini key' : 'Not set up';
+  const warn = provider === 'gemini' && voice.source === 'none';
 
   return (
-    <Section title="Live Voice" aside={<span className="t-footnote" style={{ color: palette.success }}>{label}</span>}>
+    <Section title="Live Voice" aside={<span className="t-footnote" style={{ color: warn ? palette.warning : palette.success }}>{label}</span>}>
       <SegmentedControl<VoiceProvider>
         label="Live voice"
         value={tab}
-        onChange={(t) => { setTab(t); setError(null); }}
+        onChange={(t) => { setTab(t); setKey(''); setError(null); }}
         segments={[
           { key: 'lfm', label: 'LFM Realtime (Default)' },
           { key: 'gemini', label: 'Gemini Live' },
@@ -189,14 +215,76 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
               <Mic size={20} />
             </div>
             <p className="t-footnote flex-1" style={{ color: palette.textTertiary }}>
-              The orb talks through Liquid AI’s LFM3-Audio Realtime model running locally on this machine via llama.cpp (port 9931). Ultra-low latency conversational voice with native task delegation and complete local privacy.
+              {voice.cloudLinked
+                ? 'The orb talks through Liquid AI’s LFM3-Audio Realtime model routed to Jarvis Cloud GPU machines. Ultra-low latency conversational voice with native task delegation.'
+                : 'The orb talks through Liquid AI’s LFM3-Audio Realtime model running locally on this machine via llama.cpp (port 9931). Ultra-low latency conversational voice with native task delegation and complete local privacy.'}
             </p>
           </div>
-          {provider !== 'lfm' && (
-            <div className="flex justify-end">
-              <Button primary onClick={() => use('lfm')} disabled={saving}>Set as default live voice</Button>
+
+          {voice.cloudLinked && (
+            <div className="rounded-[14px] border border-stroke bg-surface-raised/40 p-3.5">
+              <div className="flex items-center gap-2.5">
+                <Check size={16} style={{ color: palette.success }} />
+                <span className="t-subhead" style={{ color: palette.textSecondary }}>Jarvis Cloud Connected</span>
+              </div>
+              <p className="mt-1 t-footnote" style={{ color: palette.textTertiary }}>
+                LFM Realtime runs on your linked Jarvis Cloud GPU fleet with zero configuration required.
+              </p>
+              <div className="mt-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedLfm(!showAdvancedLfm)}
+                  className="t-footnote underline transition-colors hover:text-text"
+                  style={{ color: palette.textTertiary }}
+                >
+                  {showAdvancedLfm ? 'Hide custom local server settings' : 'Or connect to a custom local server…'}
+                </button>
+              </div>
             </div>
           )}
+
+          {(showAdvancedLfm || !voice.cloudLinked) && (
+            <div className="flex flex-col gap-2.5 rounded-[14px] border border-stroke bg-surface-raised/30 p-3.5">
+              <label className="flex flex-col gap-1">
+                <span className="t-caption" style={{ color: palette.textSecondary }}>LFM Server WebSocket URL</span>
+                <input
+                  type="text"
+                  value={lfmUrl}
+                  onChange={(e) => setLfmUrl(e.target.value)}
+                  placeholder={voice.lfmUrl || 'ws://127.0.0.1:9931/v1/realtime (default)'}
+                  className={input}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="t-caption" style={{ color: palette.textSecondary }}>Server API Key (optional)</span>
+                <input
+                  type="password"
+                  value={lfmKey}
+                  onChange={(e) => setLfmKey(e.target.value)}
+                  autoComplete="off"
+                  placeholder={voice.hasLfmKey ? 'Local API key saved · type to replace' : 'Bearer token / API key (optional)'}
+                  className={input}
+                />
+              </label>
+              <div className="flex flex-wrap justify-end gap-2 pt-1">
+                {voice.customLfmUrl && (
+                  <Button onClick={resetLfm} disabled={saving}>Restore default (port 9931)</Button>
+                )}
+                {voice.hasLfmKey && (
+                  <Button onClick={() => run(() => post('/api/voice/lfm', { clearKey: true }))} disabled={saving}>Remove key</Button>
+                )}
+                <Button primary icon={saving ? Loader2 : Check} onClick={saveLfm} disabled={saving || (!lfmUrl.trim() && !lfmKey.trim())}>
+                  Save local server
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            {provider !== 'lfm' && (
+              <Button primary onClick={() => use('lfm')} disabled={saving}>Set as default live voice</Button>
+            )}
+          </div>
         </>
       ) : tab === 'gemini' ? (
         <>
@@ -205,14 +293,19 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
               <Mic size={20} />
             </div>
             <p className="t-footnote flex-1" style={{ color: palette.textTertiary }}>
-              The orb talks through Google Gemini Live using GEMINI_API_KEY from backend/.env.
+              {voice.hasOwnKey
+                ? 'The orb talks through Gemini Live with your own Google AI Studio key, saved on this computer.'
+                : 'Add your Gemini API key for the orb’s voice.'}
             </p>
           </div>
-          {provider !== 'gemini' && (
-            <div className="flex justify-end">
-              <Button primary onClick={() => use('gemini')} disabled={saving}>Use Gemini Live</Button>
-            </div>
-          )}
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" className={input}
+              placeholder={voice.hasOwnKey ? 'Gemini API key saved · type to replace' : 'Your Gemini API key · aistudio.google.com/apikey'} />
+            <Button primary icon={saving ? Loader2 : Check} onClick={() => save(key)} disabled={saving || !key.trim()}>Save key</Button>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            {provider !== 'gemini' && <Button primary onClick={() => use('gemini')} disabled={saving}>Use Gemini Live</Button>}
+          </div>
         </>
       ) : (
         <>
@@ -221,12 +314,21 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
               <Mic size={20} />
             </div>
             <p className="t-footnote flex-1" style={{ color: palette.textTertiary }}>
-              Talk through OpenAI Realtime ({voice.openaiModel || 'gpt-realtime-2.1-mini'}) using OPENAI_API_KEY from backend/.env.
+              {provider === 'openai'
+                ? `The orb talks through OpenAI Realtime (${voice.openaiModel || 'gpt-realtime-2.1-mini'}) with your own OpenAI API key, saved on this computer.`
+                : `Talk through OpenAI Realtime (${voice.openaiModel || 'gpt-realtime-2.1-mini'}) with your own OpenAI API key instead of Gemini Live.`}
+              {' '}OpenAI bills your key directly — roughly $0.02 per minute of conversation.
             </p>
           </div>
-          {provider !== 'openai' && (
-            <div className="flex justify-end">
-              <Button primary onClick={() => use('openai')} disabled={saving}>Use OpenAI Realtime</Button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" className={input}
+              placeholder={voice.hasOpenAIKey ? 'OpenAI API key saved · type to replace' : 'Your OpenAI API key · platform.openai.com/api-keys'} />
+            <Button primary icon={saving ? Loader2 : Check} onClick={() => saveOpenAI(key.trim())} disabled={saving || !key.trim()}>Save key</Button>
+          </div>
+          {voice.hasOpenAIKey && (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button onClick={() => run(() => post('/api/voice/key', { kind: 'openai', key: '' }))} disabled={saving}>Remove key</Button>
+              {provider !== 'openai' && <Button primary onClick={() => use('openai')} disabled={saving}>Use OpenAI Realtime</Button>}
             </div>
           )}
         </>

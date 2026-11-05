@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronDown, History, Orbit, Settings, Waypoints } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from '../store';
+import { useStore, liveVoiceLabel } from '../store';
 import { LanguageSelector } from '../components/LanguageSelector';
 import { IconButton, Pressable, SegmentedControl, StatusDot, Switch, alpha, palette, spring } from '../ui';
 import { providerFor, providersFor, useVoiceStatus } from './status';
@@ -133,6 +133,8 @@ export function AppHeader() {
   const setScreen = useStore((s) => s.setScreen);
   const geminiLiveMode = useStore((s) => s.geminiLiveMode);
   const setGeminiLiveMode = useStore((s) => s.setGeminiLiveMode);
+  const liveVoiceProvider = useStore((s) => s.liveVoiceProvider);
+  const voiceLabel = liveVoiceLabel(liveVoiceProvider);
   const language = useStore((s) => s.language);
   const setLanguage = useStore((s) => s.setLanguage);
   const isTtsLoading = useStore((s) => s.isTtsLoading);
@@ -172,13 +174,13 @@ export function AppHeader() {
             onClick={() => setGeminiLiveMode(!geminiLiveMode)}
             role="switch"
             aria-checked={geminiLiveMode}
-            aria-label="Gemini Live conversation"
-            title={geminiLiveMode ? 'Gemini Live is on — voice goes to the live conversation' : 'Gemini Live is off — voice goes straight to your agents'}
+            aria-label={`${voiceLabel} conversation`}
+            title={geminiLiveMode ? `${voiceLabel} is on — voice goes to the live conversation` : `${voiceLabel} is off — voice goes straight to your agents`}
             className="hidden h-11 items-center gap-3 whitespace-nowrap rounded-full border pl-4 pr-2 sm:flex"
             style={{ background: palette.surface, borderColor: geminiLiveMode ? alpha(palette.accent, 85) : palette.stroke }}
           >
             <span className="text-left leading-tight">
-              <span className="block t-caption" style={{ color: palette.textTertiary }}>Gemini Live</span>
+              <span className="block t-caption" style={{ color: palette.textTertiary }}>{voiceLabel}</span>
               <span className="block t-subhead" style={{ color: geminiLiveMode ? palette.accent : palette.textSecondary }}>{geminiLiveMode ? 'On' : 'Off'}</span>
             </span>
             <Switch value={geminiLiveMode} />

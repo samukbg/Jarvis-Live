@@ -2,7 +2,7 @@
 // with the pointer, washed in the voice state's colour, with the caption and live transcript.
 import { AnimatePresence, motion, useMotionTemplate, useReducedMotion, useTransform } from 'framer-motion';
 import { Ear, Eye, EyeOff, MonitorUp, Orbit, UserRound } from 'lucide-react';
-import { useStore } from '../../store';
+import { useStore, liveVoiceLabel } from '../../store';
 import { BlobAnimation } from '../../components/BlobAnimation';
 import { TalkingAvatar } from '../../components/TalkingAvatar';
 import { IconButton, Pressable, SegmentedControl, StatusDot, alpha, palette, spring } from '../../ui';
@@ -26,6 +26,8 @@ export function VoiceStage() {
   const setAvatarMode = useStore((s) => s.setAvatarMode);
   const geminiLiveMode = useStore((s) => s.geminiLiveMode);
   const setGeminiLiveMode = useStore((s) => s.setGeminiLiveMode);
+  const liveVoiceProvider = useStore((s) => s.liveVoiceProvider);
+  const voiceLabel = liveVoiceLabel(liveVoiceProvider);
   const cameraActive = useStore((s) => s.cameraActive);
   const toggleCamera = useStore((s) => s.toggleCamera);
   const screenActive = useStore((s) => s.screenActive);
@@ -125,7 +127,7 @@ export function VoiceStage() {
                 <Pressable onClick={() => setGeminiLiveMode(true)} pressedScale={0.98}
                   className="flex w-full items-center gap-3 rounded-[14px] border px-4 py-2.5 text-left"
                   style={{ background: alpha(palette.warning, 38), borderColor: alpha(palette.warning, 85) }}>
-                  <span className="flex-1 t-footnote" style={{ color: palette.warning }}>Gemini Live is off — voice goes straight to your agents.</span>
+                  <span className="flex-1 t-footnote" style={{ color: palette.warning }}>{voiceLabel} is off — voice goes straight to your agents.</span>
                   <span className="t-subhead" style={{ color: palette.accent }}>Turn on</span>
                 </Pressable>
               </motion.div>
