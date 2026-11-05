@@ -1773,7 +1773,7 @@ async function lfmEndpoint() {
   throw Object.assign(new Error('Downloading the LFM voice model (about 1.4 GB) for this computer.'), { fallback: true, quiet: false });
 }
 
-// The primary default live voice: Liquid AI LFM3-Audio Realtime (this computer or your own server).
+// The second live voice: Liquid AI LFM3-Audio Realtime (this computer or your own server).
 const lfmRealtimeProvider = new LFMRealtimeProvider({
   ...liveVoiceOptions,
   endpoint: lfmEndpoint,
@@ -1793,18 +1793,18 @@ const lfmRealtimeProvider = new LFMRealtimeProvider({
 
 /**
  * Active live voice provider:
- * 1st (default): LFM Realtime (Liquid AI LFM3-Audio via local llama.cpp)
- * 2nd: Gemini Live (Google AI Studio)
+ * 1st (default): Gemini Live (Google AI Studio) — the most precise at delegating
+ * 2nd: LFM Realtime (Liquid AI LFM3-Audio via local llama.cpp, no key needed)
  * 3rd: OpenAI Realtime (OpenAI API key)
  */
 function activeVoiceProvider() {
-  const pref = (process.env.LIVE_VOICE_PROVIDER || 'lfm').toLowerCase();
+  const pref = (process.env.LIVE_VOICE_PROVIDER || 'gemini').toLowerCase();
   if (pref === 'openai') {
     if (process.env.OPENAI_API_KEY) return 'openai';
     return 'gemini';
   }
-  if (pref === 'gemini') return 'gemini';
-  return 'lfm';
+  if (pref === 'lfm') return 'lfm';
+  return 'gemini';
 }
 
 const useOpenAIVoice = () => activeVoiceProvider() === 'openai';
@@ -2813,6 +2813,20 @@ async function syncGeminiLiveState() {
 }
 
 const ENV_FILE = process.env.JARVIS_HOME ? path.join(process.env.JARVIS_HOME, '.env') : path.resolve(__dirname, '../.env');
+// LFM was the default for a day: back to Gemini Live once, a later LFM choice stays.
+if (process.env.LIVE_VOICE_PROVIDER === 'lfm' && process.env.LIVE_VOICE_DEFAULT_GEMINI !== '1') {
+  try {
+    setEnvValue(ENV_FILE, 'LIVE_VOICE_PROVIDER', 'gemini');
+    process.env.LIVE_VOICE_PROVIDER = 'gemini';
+    console.log('[VOICE] Live voice back to Gemini Live (the default again)');
+  } catch (e) {
+    console.error('[VOICE] Could not reset the live voice:', e.message);
+  }
+}
+if (process.env.LIVE_VOICE_DEFAULT_GEMINI !== '1') {
+  try { setEnvValue(ENV_FILE, 'LIVE_VOICE_DEFAULT_GEMINI', '1'); } catch {}
+  process.env.LIVE_VOICE_DEFAULT_GEMINI = '1';
+}
 const voiceView = () => {
   const prov = activeVoiceProvider();
   return {
@@ -2908,19 +2922,17 @@ app.post('/api/voice/lfm/install', (req, res) => {
 
 app.post('/api/voice/provider', (req, res) => {
   const rawProvider = String(req.body?.provider || '').toLowerCase();
-  let provider = 'lfm';
+  let provider = 'gemini';
   if (rawProvider === 'openai') {
     if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'Add your OpenAI API key first.' });
     provider = 'openai';
-  } else if (rawProvider === 'gemini') {
-    provider = 'gemini';
-  } else {
+  } else if (rawProvider === 'lfm') {
     provider = 'lfm';
   }
   try {
     setEnvValue(ENV_FILE, 'LIVE_VOICE_PROVIDER', provider);
     process.env.LIVE_VOICE_PROVIDER = provider;
-    const label = provider === 'lfm' ? 'LFM Realtime (Default)' : provider === 'gemini' ? 'Gemini Live' : 'OpenAI Realtime';
+    const label = provider === 'lfm' ? 'LFM Realtime' : provider === 'gemini' ? 'Gemini Live (Default)' : 'OpenAI Realtime';
     broadcastLog(`[VOICE] Live voice: ${label}`);
     broadcast({ type: 'live_voice_provider', provider });
     restartLiveVoice();

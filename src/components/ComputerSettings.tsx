@@ -179,7 +179,7 @@ const LfmLocalCard: React.FC<{ lfm: LfmLocal; saving: boolean; onInstall: () => 
 
 type VoiceProvider = 'lfm' | 'gemini' | 'openai';
 
-/** Where the orb's live voice comes from: LFM Realtime (default), Gemini Live (2nd), OpenAI Realtime (3rd). */
+/** Where the orb's live voice comes from: Gemini Live (default), LFM Realtime (2nd), OpenAI Realtime (3rd). */
 export const VoiceSection: React.FC<{ open: boolean }> = ({ open }) => {
   const { data: voice, setData, base } = useServerJson<VoiceStatus>('/api/voice/status', open);
   if (!voice) return null;
@@ -258,8 +258,8 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
         value={tab}
         onChange={(t) => { setTab(t); setKey(''); setError(null); }}
         segments={[
-          { key: 'lfm', label: 'LFM Realtime (Default)' },
-          { key: 'gemini', label: 'Gemini Live' },
+          { key: 'gemini', label: 'Gemini Live (Default)' },
+          { key: 'lfm', label: 'LFM Realtime' },
           { key: 'openai', label: 'OpenAI Realtime' },
         ]}
       />
@@ -330,7 +330,7 @@ const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => voi
 
           <div className="flex justify-end gap-2 pt-1">
             {provider !== 'lfm' && (
-              <Button primary onClick={() => use('lfm')} disabled={saving}>Set as default live voice</Button>
+              <Button primary onClick={() => use('lfm')} disabled={saving}>Use LFM Realtime</Button>
             )}
           </div>
         </>
