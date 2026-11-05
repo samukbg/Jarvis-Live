@@ -968,6 +968,8 @@ function broadcastNotification(notif) {
 // ── Pocket TTS Interceptor ──────────────────────────────────────────────────
 let activeModel = 'gemini';
 let activeLanguage = 'en';
+// The languages the user speaks, as the last app said (device_hello / set_voice_languages).
+let voiceLanguages = [];
 // When a device last sent what followed "Hey Jarvis" (wake_text): mic_toggle skips its greeting.
 let lastWakeTextAt = 0;
 let selectedModels = { hermes: 'nvidia/nemotron-3-super-120b-a12b:free', gemini: 'gemini-3.8-flash', claude: 'sonnet' };
@@ -1137,11 +1139,11 @@ function handleClientMessage(ws, message, isBinary) {
     let payload = Buffer.from(message);
     if (payload.length >= 12 && payload.slice(0, 4).toString('ascii') === 'AUDO') {
       payload = payload.slice(12);
-    } else if (payload.length >= 8) {
-      const first4 = payload.readUInt32BE(0);
-      if (first4 < 1000000000 && payload.length > 8) {
-        payload = payload.slice(8);
-      }
+    } else if (payload.length > 8 && payload.readUInt32BE(0) < 1000000000 && payload.readUInt32BE(4) === 0) {
+      // The web app's 8-byte header (ms since start, then 0). The phone sends bare PCM: testing
+      // only the first word took 4 samples out of ~1 chunk in 4 of its speech (clicks Live
+      // heard as words of another language).
+      payload = payload.slice(8);
     }
 
     // Discard empty or partial audio samples (16-bit PCM requires even byte length)
@@ -1173,6 +1175,11 @@ function handleClientMessage(ws, message, isBinary) {
         broadcast({ type: 'state_sync', geminiLiveMode });
       }
       // The phone announces which phone_action actions it can run, then answers them.
+      if (data.type === 'device_hello' || data.type === 'set_voice_languages') {
+        // ["pt", "en"]: the app's language, then the phone's (live voices' language hint).
+        const langs = Array.isArray(data.languages) ? data.languages.map((l) => String(l).slice(0, 12)).slice(0, 4) : null;
+        if (langs?.length) voiceLanguages = langs;
+      }
       if (data.type === 'device_hello') {
         phoneBridge.register(ws, { platform: data.platform, actions: data.actions });
       }
@@ -1723,6 +1730,9 @@ const liveVoiceOptions = {
       return `Failed to delegate to ${agentId.toUpperCase()}: ${e.message}`;
     }
   },
+  // The languages the user speaks (the apps send them): a hint, so a short or noisy utterance
+  // isn't heard as another language.
+  languages: () => voiceLanguages,
   speak: speak
 };
 const geminiLiveProvider = new GeminiLiveProvider({ ...liveVoiceOptions, createClient: createGeminiClient });

@@ -18,7 +18,7 @@ import { BUSINESS_TOOL } from '../../business/card.js';
 import { SHOW_CARD_TOOL, showCard } from '../../cards/showCard.js';
 import { TranscriptBuffer } from '../transcript.js';
 import { webSearch } from '../webSearch.js';
-import { realtimeTools, realtimeInstruction } from './OpenAIRealtimeProvider.js';
+import { realtimeTools } from './OpenAIRealtimeProvider.js';
 
 export const DEFAULT_LFM_MODEL = 'LFM3-Audio-2B-Q4_K_M.gguf';
 export const DEFAULT_LOCAL_URL = 'ws://127.0.0.1:9931/v1/realtime';
@@ -48,28 +48,212 @@ const ECHO_MIN_SPEECH_MS = 350;
 // The same task asked again this soon is not run again (an echo, or the model retrying a failure).
 const REPEAT_TASK_MS = 90_000;
 
-/** The 2B model's choices, spelled out: it follows explicit rules far better than hints. */
-export const LFM_RULES = `How to choose (follow exactly):
-- Greetings, thanks, small talk, opinions, jokes, general knowledge: call reply_directly.
-- The weather, or the price of a stock, a crypto (Bitcoin, Ethereum…) or a currency: call show_card. Never delegate these.
-- News, events, opening hours, sports results, facts you don't know: call search_web.
-- Phone things (alarm, timer, reminder, call, message, music, phone settings): call phone_action.
-- Only work on the user's computer (apps, files, folders, browsing, coding, long research) is delegated. The task is the user's request written as an instruction ("Open Spotify and play jazz"), never a description of the conversation.
-- When an agent fails, tell the user what happened. Never delegate the same task again unless the user asks again.
+/**
+ * The 2B model's instructions: short numbered rules and worked examples, which it follows far
+ * better than the other voices' prose (measured with a routing eval over every tool: the shared
+ * Live prompt routed 28/49 requests right). `calendar`: whether the calendar tools are declared;
+ * `today`: "Friday 6 November 2026" for relative days.
+ */
+export function lfmRules(agent, { calendar = false, today = null } = {}) {
+  const delegate = `delegate_to_${agent}`;
+  const cal = calendar
+    ? `3. The user's calendar, meetings, appointments, events: what's on, when is something, am I free → calendar_agenda; add, schedule or book → calendar_add_event; move, reschedule, rename → calendar_update_event; cancel, delete, remove → calendar_delete_event. The tools find the event from words of its title: never ask the user for an id or details.\n`
+    : `3. Adding a calendar event → phone_action with action "calendar_event".\n`;
+  return `You are Jarvis, a voice assistant. Every user turn, call exactly one tool, chosen with these rules in order:
+1. Things on the user's phone: timers, alarms, reminders, phone calls, text messages, music (play, pause, next or previous song), directions, opening an app on the phone, flashlight, brightness, Wi-Fi, Bluetooth, volume, do not disturb, dark mode, their Shortcuts → phone_action.
+2. Live cards: the weather, rain or temperature → show_card kind "weather"; the price of a stock, a crypto or a currency → show_card kind "finance" with its ticker symbol; this computer's CPU, memory, disk or battery → show_card kind "system"; a flight → show_card kind "flight"; a match score → show_card kind "sports". Never search or delegate these.
+${cal}4. Their business, company, apps or projects, how they are doing → show_business_dashboard.
+5. News, events, opening hours, results, recent facts, places → search_web.
+6. Work on the user's computer: its apps, files, folders, downloads, documents, email, code, scripts, websites to browse, research to write up → ${delegate}, with the user's request written as an instruction.
+7. Everything else: greetings, thanks, small talk, jokes, what you can do, opinions, general knowledge → reply_directly.
+Always fill "heard" with the user's exact words. Never answer with plain text instead of a tool, and never ask the user for details a tool can work out ("call my mom" → phone_action call with target "mom").
+
+Examples (user → tool and arguments):
+"Set a timer for ten minutes" → phone_action {"action":"timer","value":"600"}
+"Wake me up at 6:30" → phone_action {"action":"alarm","value":"06:30"}
+"Remind me to call the bank at 5 pm" → phone_action {"action":"reminder","text":"Call the bank"}
+"Pause the music" → phone_action {"action":"music","value":"pause"}
+"Text Paul that I'm on my way" → phone_action {"action":"message","target":"Paul","text":"I'm on my way"}
+"Turn on do not disturb" → phone_action {"action":"settings","value":"focus_on"}
+"Run my Morning shortcut" → phone_action {"action":"shortcut","target":"Morning"}
+"Is it going to rain in Rome tomorrow?" → show_card {"kind":"weather","place":"Rome","day":"tomorrow"}
+"How much is Ethereum?" → show_card {"kind":"finance","symbol":"ETH","assetName":"Ethereum"}
+"What's Microsoft trading at?" → show_card {"kind":"finance","symbol":"MSFT","assetName":"Microsoft"}
+"Dollar to yen rate" → show_card {"kind":"finance","symbol":"USDJPY=X"}
+"How much memory is my computer using?" → show_card {"kind":"system"}
+${calendar ? `"What do I have on Monday?" → calendar_agenda {"day":"monday"}
+"When is my haircut?" → calendar_agenda {"query":"haircut"}
+"Put gym tomorrow at 7 am in my calendar" → calendar_add_event {"title":"Gym","start":"<tomorrow's date>T07:00"}
+"Push my call with Sara to 4 pm" → calendar_update_event {"event":"Sara","start":"<its date>T16:00"}
+"Delete the team lunch" → calendar_delete_event {"event":"team lunch"}
+` : ''}"How are my apps doing?" → show_business_dashboard {}
+"What's the latest on the elections?" → search_web {"query":"latest election news"}
+"Open my Downloads folder and find the invoice from Amazon" → ${delegate} {"task":"Open the Downloads folder and find the invoice from Amazon"}
+"Check my inbox for anything urgent" → ${delegate} {"task":"Check my email inbox for urgent messages"}
+"Tell me a fun fact" → reply_directly {}
+${today ? `\nToday is ${today}.\n` : ''}
+After a tool, speak to the user in one or two short sentences, in English. When an agent fails, say what happened; never delegate the same task again unless the user asks again.
 
 `;
+}
 
 /**
- * A "computer task" that is really a phone action, a price or the weather: the 2B model sends
- * those to the agent after a few delegations in a conversation. The tool it should call, or null.
+ * The session's instructions: the rules, then the shared voice prompt (for the spoken answers:
+ * cards, phone actions, agent results), then the turns before a drop.
  */
-export function misroutedTask(task) {
-  const t = String(task || '');
-  if (/\b(timer|alarm|remind me|reminder|wake me)\b/i.test(t)) return PHONE_ACTION_TOOL.name;
-  if (/\b(weather|forecast|temperature)\b/i.test(t)) return SHOW_CARD_TOOL.name;
-  const asset = /\b(bitcoin|btc|ethereum|eth|crypto|solana|dogecoin|stocks?|shares|exchange rate)\b/i;
-  if (asset.test(t) && /\b(price|cost|worth|value|how much|trading|quote)\b/i.test(t)) return SHOW_CARD_TOOL.name;
+export function lfmInstructions(agent, history = [], { calendar = null, now = Date.now() } = {}) {
+  const today = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(now));
+  // Not the shared Live prompt: it sends weather and prices to a web search, and the 2B model
+  // followed it over the rules.
+  let text = `${lfmRules(agent, { calendar: !!calendar, today })}The agent's answers come back later as a message starting with "(Agent result)": tell the user what it says, briefly and naturally. For messages and calls, say who it is for; the phone asks the user to confirm.${calendar ? `\n\n${calendar}` : ''}`;
+  if (history.length) {
+    text += `\n\nThe conversation so far (the connection dropped; carry on from here without mentioning it):\n${history.map((h) => `${h.role === 'user' ? 'User' : 'Jarvis'}: ${h.text}`).join('\n')}`;
+  }
+  return text;
+}
+
+/** The legacy rule block (kept for tests that check the shape of the instructions). */
+export const LFM_RULES = lfmRules('agy');
+
+/** Talking without a tool: in a text decision the 2B model always reaches for a tool, so it gets one. */
+export const REPLY_TOOL = {
+  type: 'function',
+  name: 'reply_directly',
+  description: 'Answer the user yourself, out loud, with no other tool: greetings, thanks, small talk, how you are, what you can do, opinions, jokes, and general knowledge you already know (science, history, definitions, fun facts, advice).',
+  parameters: { type: 'object', properties: {}, required: [] },
+};
+
+/** Every LFM tool asks first for the user's words: the guard below checks the choice against them. */
+const HEARD = { type: 'string', description: "The user's exact words." };
+export const lfmTools = (agent, opts) => [REPLY_TOOL, ...realtimeTools(agent, opts)].map((t) => ({
+  ...t,
+  parameters: { ...t.parameters, properties: { heard: HEARD, ...t.parameters.properties }, required: ['heard', ...(t.parameters.required || [])] },
+}));
+
+/**
+ * What the user clearly asked for, from their words: { tool, hint } when the words leave no
+ * doubt (a timer is a phone action, Bitcoin's price is a card…), else null. Conservative on
+ * purpose: it only overrules the model where the 2B model was measured to go wrong.
+ */
+export function intentOf(words, agent = 'agy', { calendar = true } = {}) {
+  const t = ` ${String(words || '').toLowerCase()} `;
+  if (!t.trim()) return null;
+  const computer = /\b(on|in|from) (my|the) (computer|mac|laptop|pc|desktop)\b|\b(file|files|folder|folders|downloads?|documents?|pdf|script|code|repo|project|vs ?code|terminal|inbox|e-?mails?|spreadsheet|excel|word document|python|javascript|website|program)\b/;
+  const phone = { tool: PHONE_ACTION_TOOL.name };
+  if (/\b(timer|alarm|wake me( up)?|remind me|reminder|flashlight|torch|brightness|do not disturb|airplane mode|low power|dark mode|light mode|wi-?fi|bluetooth|volume)\b/.test(t) && !computer.test(t)) return { ...phone, hint: 'a phone action (timer, alarm, reminder or phone setting)' };
+  if (/\b(shortcut)\b/.test(t) && !computer.test(t)) return { ...phone, hint: 'phone_action with action "shortcut"' };
+  if (/\b(call|phone|ring|facetime)\b \w+/.test(t) && /^ *(please )?(call|phone|ring|facetime)\b/.test(t)) return { ...phone, hint: 'phone_action with action "call"' };
+  if (/\b(text|message|sms|whatsapp)\b/.test(t) && /\b(send|text|message|tell)\b/.test(t) && !computer.test(t) && !/\bemail\b/.test(t)) return { ...phone, hint: 'phone_action with action "message"' };
+  if (/\b(pause|resume|skip|next|previous)\b.*\b(music|song|track)\b|\b(pause|stop) the music\b|\bnext song\b/.test(t) && !/\bspotify\b/.test(t)) return { ...phone, hint: 'phone_action with action "music"' };
+  if (/\b(directions|navigate|take me) to\b/.test(t)) return { ...phone, hint: 'phone_action with action "navigate"' };
+  if (/\b(on|in) my (phone|iphone)\b/.test(t)) return { ...phone, hint: 'phone_action: it is on the phone' };
+  if (/\b(weather|forecast|rain|raining|snow|snowing|sunny|cloudy|windy|umbrella|jacket|coat|temperature|degrees|how (hot|cold|warm))\b/.test(t) && !computer.test(t) && !/\b(cpu|gpu|computer|mac)\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "weather"' };
+  const asset = /\b(bitcoin|btc|ethereum|ether|eth|crypto|solana|dogecoin|xrp|cardano|stocks?|shares?|nasdaq|s&p|dow jones|exchange rate|euro|dollar|pound|yen|apple|tesla|nvidia|microsoft|amazon|google|meta)\b/;
+  if (asset.test(t) && /\b(price|cost|worth|value|how much|trading|quote|rate|doing today|up|down)\b/.test(t) && !computer.test(t) && !/\b(script|track|chart|csv|history|news)\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "finance" and the ticker symbol' };
+  if (/\b(cpu|processor|ram|memory|disk|storage|battery)\b/.test(t) && /\b(my|this|the) (computer|mac|laptop|pc)\b|\bmy computer'?s\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "system"' };
+  if (/\bflight\b/.test(t) && /\b[a-z]{2} ?\d{2,4}\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "flight"' };
+  if (calendar && /\b(calendar|agenda|schedule|meeting|meetings|appointment|appointments|event|events)\b/.test(t) && !computer.test(t)) {
+    if (/\b(cancel|delete|remove)\b/.test(t)) return { tool: 'calendar_delete_event', hint: 'calendar_delete_event with words of the event title' };
+    if (/\b(move|reschedule|push|postpone|change|rename)\b/.test(t)) return { tool: 'calendar_update_event', hint: 'calendar_update_event with words of the event title' };
+    if (/\b(add|put|schedule|book|create|set up)\b/.test(t) && !/\bwhat\b/.test(t)) return { tool: 'calendar_add_event', hint: 'calendar_add_event' };
+    return { tool: 'calendar_agenda', hint: 'calendar_agenda' };
+  }
+  if (/\b(my|our) (business|businesses|company|startup|projects|apps)\b/.test(t) && !computer.test(t)) return { tool: BUSINESS_TOOL.name, hint: 'show_business_dashboard' };
+  if (computer.test(t) && /\b(open|find|create|make|write|check|move|copy|delete|rename|search|organi[sz]e|clean|run|build|fix|look)\b/.test(t)) return { tool: `delegate_to_${agent}`, hint: `${`delegate_to_${agent}`}: it is work on the user's computer` };
   return null;
+}
+
+/**
+ * The model chose `name` with `args` (args.heard: the user's words). When the words clearly ask
+ * for another tool, that tool and why — the model decides again with it named — else null.
+ * reply_directly is overruled too: the 2B model "answers" prices and timers itself.
+ */
+export function rerouteFor(name, args, agent = 'agy', { calendar = true } = {}) {
+  const words = args?.heard || (name === `delegate_to_${agent}` ? args?.task : name === 'search_web' ? args?.query : '');
+  const want = intentOf(words, agent, { calendar });
+  if (!want || want.tool === name) return null;
+  // A search for news about a company is not its share price; a delegation that mentions a
+  // timer inside a script is not a timer (intentOf already excludes computer words).
+  return want;
+}
+
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const localDate = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** The day the user's words name ("tomorrow", "on Friday", "next Tuesday") as YYYY-MM-DD, else null. */
+export function dayFromWords(words, now = Date.now()) {
+  const t = String(words || '').toLowerCase();
+  const day = 86_400_000;
+  if (/\bday after tomorrow\b/.test(t)) return localDate(now + 2 * day);
+  if (/\btomorrow\b/.test(t)) return localDate(now + day);
+  if (/\b(today|tonight|this (morning|afternoon|evening))\b/.test(t)) return localDate(now);
+  const wd = WEEKDAYS.findIndex((w) => new RegExp(`\\b${w}\\b`).test(t));
+  if (wd < 0) return null;
+  const ahead = (wd - new Date(now).getDay() + 7) % 7 || 7;
+  return localDate(now + ahead * day);
+}
+
+const TICKERS = { bitcoin: 'BTC', ethereum: 'ETH', ether: 'ETH', solana: 'SOL', dogecoin: 'DOGE', xrp: 'XRP', cardano: 'ADA', litecoin: 'LTC', apple: 'AAPL', tesla: 'TSLA', nvidia: 'NVDA', microsoft: 'MSFT', amazon: 'AMZN', google: 'GOOGL', alphabet: 'GOOGL', meta: 'META', netflix: 'NFLX' };
+const CURRENCIES = { euro: 'EUR', euros: 'EUR', dollar: 'USD', dollars: 'USD', pound: 'GBP', pounds: 'GBP', yen: 'JPY', franc: 'CHF', francs: 'CHF', real: 'BRL', reais: 'BRL' };
+
+/** "How much is Bitcoin?" → { symbol: 'BTC', assetName: 'Bitcoin' }; "euro to dollar" → EURUSD=X. */
+export function assetFromWords(words) {
+  const t = String(words || '').toLowerCase();
+  const coin = Object.keys(TICKERS).find((k) => new RegExp(`\\b${k}\\b`).test(t));
+  if (coin) return { symbol: TICKERS[coin], assetName: coin[0].toUpperCase() + coin.slice(1) };
+  const cur = [...t.matchAll(/\b(euros?|dollars?|pounds?|yen|francs?|real|reais)\b/g)].map((m) => CURRENCIES[m[1]]);
+  const pair = [...new Set(cur)];
+  if (pair.length >= 2) return { symbol: `${pair[0]}${pair[1]}=X` };
+  return null;
+}
+
+/**
+ * The 2B model's arguments, mended from the user's own words (args.heard): it gets relative
+ * dates wrong ("tomorrow" a week off), leaves targets empty ("Ring my brother" → target ""),
+ * writes summaries as instructions ("Provide the price of…") and plays instead of skipping.
+ * Returns the arguments the tool runs with (without `heard`).
+ */
+export function repairArgs(name, args = {}, { now = Date.now() } = {}) {
+  const { heard: rawHeard, ...out } = args || {};
+  const heard = String(rawHeard || '').trim();
+  const t = heard.toLowerCase();
+  const empty = (v) => v === undefined || v === null || String(v).trim() === '';
+  const tail = (re) => (re.exec(heard)?.[1] || '').replace(/[.?!]+$/, '').trim();
+  if (name === PHONE_ACTION_TOOL.name) {
+    if (out.action === 'music' && heard) {
+      const v = /\b(next|skip)\b/.test(t) ? 'next' : /\b(previous|last song|go back)\b/.test(t) ? 'previous' : /\b(pause|stop)\b/.test(t) ? 'pause' : null;
+      if (v) out.value = v;
+    }
+    if (out.action === 'call' && empty(out.target)) out.target = tail(/\b(?:call|ring|phone|facetime)\s+(.+)$/i);
+    if (out.action === 'navigate' && empty(out.target)) out.target = tail(/\b(?:to|towards)\s+(.+)$/i);
+    if (out.action === 'message' && empty(out.target)) out.target = tail(/\b(?:text|message|tell)\s+([A-Z]?\w+)/i);
+    if (out.action === 'timer' && heard && empty(out.value)) out.value = heard;
+  }
+  if (name === SHOW_CARD_TOOL.name) {
+    // A summary the model wrote before having the figures is a question or an order, not an answer.
+    if (/^(provide|get|show|check|find|display|fetch|look)\b|\?$/i.test(String(out.summary || '').trim())) out.summary = '';
+    if (out.kind === 'finance' && heard && !out.symbol) Object.assign(out, assetFromWords(heard) || {});
+    if (out.kind === 'weather' && heard) {
+      if (empty(out.place)) out.place = tail(/\bin ([A-Z][\w'’.-]*(?: [A-Z][\w'’.-]*)*)/);
+      if (/\bday after tomorrow\b/.test(t)) out.day = 'day after tomorrow';
+      else if (/\btomorrow\b/.test(t)) out.day = 'tomorrow';
+    }
+  }
+  if (/^calendar_(add|update)_event$/.test(name) && heard && typeof out.start === 'string') {
+    const day = dayFromWords(heard, now);
+    const m = /^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2})?$/.exec(out.start.trim());
+    // "On Friday" said on a Friday: today or next week are both fair, the model's pick stands.
+    const sameWeekday = m && WEEKDAYS.some((w) => t.includes(w)) && new Date(`${m[1]}T12:00:00`).getDay() === new Date(`${day}T12:00:00`).getDay() && m[1] >= localDate(now);
+    if (day && m && m[1] !== day && !sameWeekday) out.start = `${day}${m[2] || ''}`;
+    if (day && !m && /^T?\d{2}:\d{2}$/.test(out.start.trim())) out.start = `${day}T${out.start.trim().replace(/^T/, '')}`;
+  }
+  if (/^calendar_(update|delete)_event$/.test(name) && empty(out.event) && heard) {
+    out.event = tail(/\b(?:cancel|delete|remove|move|reschedule|push|postpone|change|rename)\s+(?:my |the |our )?(.+?)(?:\s+(?:to|from|on|at|until|for)\b.*)?$/i) || heard.replace(/[.?!]+$/, '');
+  }
+  return out;
 }
 
 /** Words of a task, to spot the same task asked twice. */
@@ -82,15 +266,10 @@ export function sameTask(a, b) {
   return common / Math.min(x.size, y.size) >= 0.6;
 }
 
-/** Talking without a tool: in a text decision the 2B model always reaches for a tool, so it gets one. */
-export const REPLY_TOOL = {
-  type: 'function',
-  name: 'reply_directly',
-  description: 'Answer the user yourself, out loud, with no other tool: greetings, thanks, small talk, how you are, opinions, jokes, and general knowledge you already know (science, history, definitions, fun facts, advice).',
-  parameters: { type: 'object', properties: {}, required: [] },
-};
-
-export const lfmTools = (agent, opts) => [REPLY_TOOL, ...realtimeTools(agent, opts)];
+/** Delegations that are really a phone action, a price or the weather (rerouteFor, from the task). */
+export function misroutedTask(task) {
+  return rerouteFor('delegate_to_agy', { task }, 'agy')?.tool || null;
+}
 
 /**
  * Resamples 24 kHz 16-bit signed mono PCM to 16 kHz 16-bit signed mono PCM using linear interpolation.
@@ -384,7 +563,7 @@ export class LFMRealtimeProvider {
         session: {
           type: 'realtime',
           model: this.modelGetter(),
-          instructions: LFM_RULES + realtimeInstruction(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null }),
+          instructions: lfmInstructions(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null }),
           output_modalities: ['text'],
           audio: {
             input: { format: { type: 'audio/pcm', rate: 16000 } },
@@ -624,15 +803,17 @@ export class LFMRealtimeProvider {
       const name = call.name;
       let output;
 
-      if (name === REPLY_TOOL.name) {
-        output = { ok: true, note: 'Answer the user now, out loud, in one or two short sentences.' };
-      } else if (name === `delegate_to_${this.targetAgent}` && !this.redirected && misroutedTask(args.task)) {
-        // Once per turn: the model chooses again, with the right tool named.
-        const tool = misroutedTask(args.task);
+      if (!this.redirected && rerouteFor(name, args, this.targetAgent, { calendar: !!this.calendar })) {
+        // The user's words clearly ask for another tool (a timer, a price, the weather…): once
+        // per turn, the model chooses again with that tool named, before anything runs.
+        const want = rerouteFor(name, args, this.targetAgent, { calendar: !!this.calendar });
         this.redirected = true;
+        this.turnHeard = String(args.heard || '');
         redecide = true;
-        this.broadcastLog(`[LFM REALTIME] Not a computer task, asking for ${tool}: ${args.task}`);
-        output = { error: `This is not a task for the computer. Call ${tool} for it now.` };
+        this.broadcastLog(`[LFM REALTIME] ${name} doesn't fit "${args.heard || args.task || args.query || ''}": asking for ${want.tool}`);
+        output = { error: `Wrong tool: this is ${want.hint}. Call ${want.tool} for it now.` };
+      } else if (name === REPLY_TOOL.name) {
+        output = { ok: true, note: 'Answer the user now, out loud, in one or two short sentences.' };
       } else if (name === `delegate_to_${this.targetAgent}` && this.repeatOf(String(args.task || ''))) {
         const prev = this.repeatOf(String(args.task || ''));
         this.broadcastLog(`[LFM REALTIME] Not delegating again (asked ${Math.round((Date.now() - prev.at) / 1000)} s ago): ${args.task}`);
@@ -660,6 +841,14 @@ export class LFMRealtimeProvider {
         })();
         output = { status: 'started', note: 'Running in the background. Tell the user in one short sentence that you are on it. The answer arrives later as a message; do not claim it is finished.' };
       } else {
+        // After a reroute the model often shortens "heard": the first call's words are better.
+        args = repairArgs(name, { ...args, heard: this.redirected && this.turnHeard ? this.turnHeard : args.heard });
+        if (name === 'calendar_delete_event' && args.confirmed === true) {
+          // The 2B model says confirmed=true on the first ask: only after the user was asked.
+          const asked = this.pendingDelete && Date.now() - this.pendingDelete.at < 120_000 && sameTask(this.pendingDelete.event, args.event);
+          if (!asked) args.confirmed = false;
+        }
+        if (name === 'calendar_delete_event' && args.confirmed !== true) this.pendingDelete = { event: String(args.event || ''), at: Date.now() };
         try {
           if (name === 'search_web') output = { result: await this.search(args.query) };
           else if (name === PHONE_ACTION_TOOL.name) output = { result: this.phoneBridge ? await this.phoneBridge.run(args) : 'Phone actions not available.' };

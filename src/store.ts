@@ -335,6 +335,9 @@ export const useStore = create<AppState>((set, get) => {
         // Request immediate state sync
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'get_state' }));
+          // Live voice expects these languages (a short utterance was heard as another one).
+          const langs = [...new Set([...(navigator.languages || [navigator.language]), 'en'].map((l) => String(l || '').split('-')[0].toLowerCase()).filter(Boolean))].slice(0, 3);
+          ws.send(JSON.stringify({ type: 'set_voice_languages', languages: langs }));
         }
       };
 

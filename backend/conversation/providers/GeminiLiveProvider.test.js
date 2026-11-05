@@ -80,3 +80,14 @@ test('Google closes the socket before setup completes (live.connect never settle
   assert.equal(opened, 2);
   assert.ok(p.session);
 });
+
+test('the user\'s languages are a hint in the instructions (a short utterance is not heard as another language)', async () => {
+  const { languageHint, languageCodeOf } = await import('./GeminiLiveProvider.js');
+  assert.equal(languageCodeOf('pt-BR'), 'pt');
+  assert.equal(languageCodeOf('eng'), 'en');
+  assert.equal(languageCodeOf('xx'), '');
+  assert.equal(languageHint([]), '');
+  assert.match(languageHint(['pt', 'en', 'pt-PT']), /The user speaks Portuguese or English\./);
+  assert.match(liveInstruction('agy', { languages: ['fr'] }), /The user speaks French\. Expect it/);
+  assert.doesNotMatch(liveInstruction('agy'), /The user speaks/);
+});

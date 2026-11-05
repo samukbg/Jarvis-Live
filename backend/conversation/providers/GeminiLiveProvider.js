@@ -17,14 +17,40 @@ export const AGENT_LABELS = { agy: 'Antigravity', gemini: 'Antigravity', claude:
 // How long Gemini gets to speak its own acknowledgement before Jarvis writes one.
 export const ACK_GRACE_MS = 2500;
 
+const LANGUAGE_NAMES = {
+  en: 'English', pt: 'Portuguese', fr: 'French', es: 'Spanish', it: 'Italian', de: 'German', nl: 'Dutch',
+  pl: 'Polish', ru: 'Russian', uk: 'Ukrainian', tr: 'Turkish', ar: 'Arabic', hi: 'Hindi', ja: 'Japanese',
+  ko: 'Korean', zh: 'Chinese', sv: 'Swedish', da: 'Danish', no: 'Norwegian', nb: 'Norwegian', fi: 'Finnish',
+  el: 'Greek', ro: 'Romanian', cs: 'Czech', hu: 'Hungarian', he: 'Hebrew', id: 'Indonesian', vi: 'Vietnamese', th: 'Thai',
+};
+
+/** "pt", "pt-BR", "eng" → "pt" / "en" ('' when unknown). */
+export function languageCodeOf(lang) {
+  const code = String(lang || '').trim().toLowerCase().replace('_', '-').split('-')[0];
+  if (code === 'eng') return 'en';
+  return LANGUAGE_NAMES[code] ? code : '';
+}
+
+/**
+ * The languages the user speaks (their app's language, then their phone's): live voices guess
+ * the language from each utterance, and a short or noisy one came out as another language
+ * (Portuguese heard as Spanish or Russian…). The hint keeps them to the user's languages.
+ */
+export function languageHint(languages = []) {
+  const names = [...new Set(languages.map(languageCodeOf).filter(Boolean))].map((c) => LANGUAGE_NAMES[c]);
+  if (!names.length) return '';
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+  return `\nThe user speaks ${list}. Expect ${names.length === 1 ? 'it' : 'one of these'}: when an utterance is short, noisy or unclear, it is in ${list}, never in another language — understand it in ${list} and answer in the language they used. Switch to another language only when the user clearly speaks a whole sentence in it.`;
+}
+
 /**
  * The Live session's rules: search answers itself, computer tasks go to the agent — said out loud
  * first. `search`: how this voice searches (Gemini's Google Search; a tool for the others).
  */
-export function liveInstruction(agent, { search = 'use Google Search', calendar = null } = {}) {
+export function liveInstruction(agent, { search = 'use Google Search', calendar = null, languages = [] } = {}) {
   const tool = `delegate_to_${agent}`;
   const name = AGENT_LABELS[agent] || agent.toUpperCase();
-  return `You are Jarvis, a concise and helpful AI assistant. Respond naturally and briefly, in the language the user speaks.
+  return `You are Jarvis, a concise and helpful AI assistant. Respond naturally and briefly, in the language the user speaks.${languageHint(languages)}
 
 Questions a web search can answer (weather, news, events, opening hours, prices, sports, facts, places): ${search} and answer yourself, right away. Do not delegate them.
 
@@ -107,6 +133,8 @@ export class GeminiLiveProvider {
     // show_card (cards/showCard.js): a live card from the answer's facts.
     this.showCard = options.showCard || showCard;
     this.speak = options.speak;
+    // The languages the user speaks (the apps send them): see languageHint.
+    this.languages = options.languages || (() => []);
     
     this.session = null;
     this.connecting = false;
@@ -178,7 +206,7 @@ export class GeminiLiveProvider {
               }
             }
           },
-          systemInstruction: liveInstruction(this.targetAgent, { calendar: this.calendar?.prompt() || null }),
+          systemInstruction: liveInstruction(this.targetAgent, { calendar: this.calendar?.prompt() || null, languages: this.languages() }),
           outputAudioTranscription: {},
           inputAudioTranscription: {},
           tools: liveTools(this.targetAgent, { calendar: !!this.calendar }),

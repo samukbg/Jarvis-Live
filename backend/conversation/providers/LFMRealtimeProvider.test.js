@@ -400,3 +400,106 @@ test('misroutedTask', async () => {
   assert.equal(misroutedTask('Open Spotify and play jazz'), null);
   assert.equal(misroutedTask('Write a script that tracks bitcoin prices into a CSV'), null);
 });
+
+test('every LFM tool asks for the words heard first; the rules come with worked examples', async () => {
+  const { lfmTools, lfmInstructions } = await import('./LFMRealtimeProvider.js');
+  for (const t of lfmTools('agy', { calendar: true })) {
+    assert.deepEqual(Object.keys(t.parameters.properties)[0], 'heard', t.name);
+    assert.ok(t.parameters.required.includes('heard'), t.name);
+  }
+  const text = lfmInstructions('agy', [], { calendar: 'CAL', now: Date.parse('2026-11-06T12:00:00') });
+  assert.match(text, /phone_action \{"action":"timer","value":"600"\}/);
+  assert.match(text, /calendar_update_event/);
+  assert.match(text, /Today is Friday,? 6 November 2026/);
+  // Not the shared prompt that sends weather and prices to a web search.
+  assert.doesNotMatch(text, /Questions a web search can answer/);
+  assert.doesNotMatch(lfmInstructions('agy', [], {}), /calendar_add_event/);
+});
+
+test('intentOf: clear requests map to their tool, computer work and ambiguity do not', async () => {
+  const { intentOf } = await import('./LFMRealtimeProvider.js');
+  const tool = (w, opts) => intentOf(w, 'agy', opts)?.tool ?? null;
+  assert.equal(tool('Set a timer for five minutes'), 'phone_action');
+  assert.equal(tool('Turn off Wi-Fi'), 'phone_action');
+  assert.equal(tool('Call my mom'), 'phone_action');
+  assert.equal(tool('Open WhatsApp on my phone'), 'phone_action');
+  assert.equal(tool('Do I need an umbrella in Berlin today?'), 'show_card');
+  assert.equal(tool('How much is Bitcoin right now?'), 'show_card');
+  assert.equal(tool('How is Tesla stock doing today?'), 'show_card');
+  assert.equal(tool("What's my computer's battery level?"), 'show_card');
+  assert.equal(tool('Cancel my meeting with John tomorrow'), 'calendar_delete_event');
+  assert.equal(tool('Move my dentist appointment to Thursday'), 'calendar_update_event');
+  assert.equal(tool('Schedule a team meeting tomorrow at 10 am'), 'calendar_add_event');
+  assert.equal(tool('Do I have any meetings today?'), 'calendar_agenda');
+  assert.equal(tool('Add lunch with Ana to my calendar', { calendar: false }), null);
+  assert.equal(tool('How is my business doing?'), 'show_business_dashboard');
+  assert.equal(tool('Find the PDF I downloaded yesterday'), 'delegate_to_agy');
+  assert.equal(tool('Write a Python script that sets an alarm'), 'delegate_to_agy');
+  assert.equal(tool('Write a script that tracks bitcoin prices into a CSV'), 'delegate_to_agy');
+  assert.equal(tool('Open Spotify and play jazz'), null);
+  assert.equal(tool('Tell me a joke'), null);
+  assert.equal(tool("What's the latest news about Apple?"), null);
+});
+
+test('rerouteFor: any tool (reply_directly too) is overruled by clear words, a right pick is not', async () => {
+  const { rerouteFor } = await import('./LFMRealtimeProvider.js');
+  assert.equal(rerouteFor('reply_directly', { heard: 'Set a timer for ten minutes' })?.tool, 'phone_action');
+  assert.equal(rerouteFor('search_web', { heard: 'Will it rain tomorrow in London?', query: 'London weather' })?.tool, 'show_card');
+  assert.equal(rerouteFor('search_web', { query: 'Bitcoin price' })?.tool, 'show_card');
+  assert.equal(rerouteFor('delegate_to_agy', { task: 'Check the CPU and memory on my computer', heard: "How's my computer doing? Check the CPU and memory." })?.tool, 'show_card');
+  assert.equal(rerouteFor('show_card', { heard: 'How much is Bitcoin?', kind: 'finance' }), null);
+  assert.equal(rerouteFor('search_web', { heard: 'Who won the Champions League?' }), null);
+});
+
+test('repairArgs mends the 2B model\'s arguments from the user\'s words', async () => {
+  const { repairArgs, dayFromWords } = await import('./LFMRealtimeProvider.js');
+  const now = Date.parse('2026-11-06T12:00:00'); // a Friday
+  assert.equal(dayFromWords('tomorrow at noon', now), '2026-11-07');
+  assert.equal(dayFromWords('next Tuesday', now), '2026-11-10');
+  assert.equal(dayFromWords('lunch', now), null);
+  assert.deepEqual(repairArgs('calendar_update_event', { heard: 'Reschedule my call with Sara to tomorrow at noon.', event: 'Sara', start: '2026-11-11T12:00' }, { now }),
+    { event: 'Sara', start: '2026-11-07T12:00' });
+  assert.equal(repairArgs('calendar_add_event', { heard: 'Add lunch with Ana on Friday at 1 pm', title: 'Lunch', start: '2026-11-06T13:00' }, { now }).start, '2026-11-06T13:00');
+  assert.equal(repairArgs('calendar_delete_event', { heard: 'Remove the yoga class from my calendar.', event: '' }).event, 'yoga class');
+  assert.equal(repairArgs('calendar_delete_event', { heard: 'yoga class', event: '' }).event, 'yoga class');
+  assert.equal(repairArgs('phone_action', { heard: 'Ring my brother.', action: 'call', target: '' }).target, 'my brother');
+  assert.equal(repairArgs('phone_action', { heard: 'Take me to the nearest gas station.', action: 'navigate' }).target, 'the nearest gas station');
+  assert.equal(repairArgs('phone_action', { heard: 'Play the next track.', action: 'music', value: 'play' }).value, 'next');
+  assert.deepEqual(repairArgs('show_card', { heard: 'How much is Bitcoin right now?', kind: 'finance', summary: 'Current price of Bitcoin' }),
+    { kind: 'finance', summary: 'Current price of Bitcoin', symbol: 'BTC', assetName: 'Bitcoin' });
+  assert.equal(repairArgs('show_card', { heard: 'One euro in dollars?', kind: 'finance' }).symbol, 'EURUSD=X');
+  const card = repairArgs('show_card', { heard: 'Will it rain tomorrow in New York?', kind: 'weather', summary: 'Provide the weather in New York' });
+  assert.deepEqual(card, { kind: 'weather', summary: '', place: 'New York', day: 'tomorrow' });
+});
+
+test('a reroute works for every tool, and the turn\'s first words fill the second pick\'s arguments', async () => {
+  const shown = [];
+  const { p, ws } = await connected({ showCard: async (args) => { shown.push(args); return { result: 'Bitcoin is at 90,000 dollars.' }; } });
+  p.sendUserText('How much is Bitcoin right now?');
+  ws.clear();
+  decision(ws, [call('reply_directly', { heard: 'How much is Bitcoin right now?' })]);
+  await tick();
+  assert.match(ws.sent.find((e) => e.item?.type === 'function_call_output').item.output, /show_card/);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text']);
+  ws.clear();
+  decision(ws, [call('show_card', { heard: 'Bitcoin', kind: 'finance', symbol: 'BTC', summary: 'Provide the Bitcoin price' }, 'c2')]);
+  await tick(); await tick();
+  assert.deepEqual(shown, [{ kind: 'finance', symbol: 'BTC', summary: '' }]);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+});
+
+test('a calendar delete waits for the user to confirm, even when the model says confirmed=true', async () => {
+  const runs = [];
+  const calendar = { prompt: () => 'CAL', isTool: (n) => n.startsWith('calendar_'), runTool: async (n, a) => { runs.push(a); return a.confirmed ? 'Deleted.' : 'Not deleted yet. Ask the user to confirm.'; } };
+  const { p, ws } = await connected({ calendar });
+  p.sendUserText('Delete the team lunch');
+  decision(ws, [call('calendar_delete_event', { heard: 'Delete the team lunch', event: 'team lunch', confirmed: true })]);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(runs[0].confirmed, false);
+  decision(ws, [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Delete the team lunch on Friday?' }] }]); // spoken
+  await tick();
+  p.sendUserText('Yes');
+  decision(ws, [call('calendar_delete_event', { heard: 'Yes', event: 'team lunch', confirmed: true }, 'c2')]);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(runs[1].confirmed, true);
+});

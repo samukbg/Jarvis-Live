@@ -69,8 +69,8 @@ export function realtimeTools(agent, { calendar = false } = {}) {
 }
 
 /** The rules (shared with Gemini), plus how agent answers arrive, plus the turns before a drop. */
-export function realtimeInstruction(agent, history = [], { calendar = null } = {}) {
-  let text = `${liveInstruction(agent, { search: 'call `search_web`', calendar })}
+export function realtimeInstruction(agent, history = [], { calendar = null, languages = [] } = {}) {
+  let text = `${liveInstruction(agent, { search: 'call `search_web`', calendar, languages })}
 
 The agent's answers come back later as a message starting with "(Agent result)": tell the user what it says, briefly and naturally.`;
   if (history.length) {
@@ -97,6 +97,8 @@ export class OpenAIRealtimeProvider {
     this.calendar = options.calendar || null;
     this.showCard = options.showCard || showCard;
     this.forSpeaker = options.forSpeaker || ((fn) => fn());
+    // The languages the user speaks (GeminiLiveProvider.js languageHint).
+    this.languages = options.languages || (() => []);
 
     this.ws = null;
     // The open, configured socket (null while connecting or off): what the server checks.
@@ -237,7 +239,7 @@ export class OpenAIRealtimeProvider {
         session: {
           type: 'realtime',
           model,
-          instructions: realtimeInstruction(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null }),
+          instructions: realtimeInstruction(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null, languages: this.languages() }),
           output_modalities: ['audio'],
           audio: {
             input: {

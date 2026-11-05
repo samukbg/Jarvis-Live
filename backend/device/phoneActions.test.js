@@ -74,3 +74,27 @@ test('uses the most recently connected open phone', async () => {
   await bridge.run({ action: 'music', value: 'pause' });
   assert.equal(old.sent.length, 1);
 });
+
+test('normalizePhoneArgs: what voice models say becomes what the phone runs', async () => {
+  const { normalizePhoneArgs: n, durationSeconds, clockTime } = await import('./phoneActions.js');
+  assert.deepEqual(n({ action: 'wifi', value: 'off' }), { action: 'settings', value: 'wifi_off' });
+  assert.deepEqual(n({ action: 'bluetooth_on' }), { action: 'settings', value: 'bluetooth_on' });
+  assert.deepEqual(n({ action: 'settings', value: 'do not disturb' }), { action: 'settings', value: 'focus_on' });
+  assert.deepEqual(n({ action: 'settings', value: 'volume 60' }), { action: 'settings', value: 'volume_50' });
+  assert.deepEqual(n({ action: 'timer', value: '5 minutes' }), { action: 'timer', value: '300' });
+  assert.deepEqual(n({ action: 'alarm', value: '7am' }), { action: 'alarm', value: '07:00' });
+  assert.deepEqual(n({ action: 'music', value: 'stop' }), { action: 'music', value: 'pause' });
+  assert.deepEqual(n({ action: 'open', target: 'WhatsApp' }), { action: 'open_app', target: 'WhatsApp' });
+  assert.deepEqual(n({ action: 'flashlight', value: 'off' }), { action: 'flashlight', value: 'off' });
+  assert.equal(durationSeconds('1 hour 30 minutes'), '5400');
+  assert.equal(durationSeconds('00:05:00'), '300');
+  assert.equal(clockTime('6:45 pm'), '18:45');
+  assert.equal(clockTime('12 am'), '00:00');
+});
+
+test('a sloppy call runs normalized on the phone', async () => {
+  const bridge = new PhoneBridge({ log: () => {} });
+  const { sent } = fakePhone(bridge);
+  assert.equal(await bridge.run({ action: 'wifi', value: 'off' }), 'did settings');
+  assert.deepEqual([sent[0].action, sent[0].value], ['settings', 'wifi_off']);
+});
