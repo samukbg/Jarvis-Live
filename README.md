@@ -53,7 +53,7 @@ Most "AI assistants" are a chat box. Jarvis Live is an **AI operating layer for 
 ## ✨ Features
 
 ### Voice
-- **Live voice (LFM3-Audio), an option that runs on your own computer**: Liquid AI's [LFM3-Audio-2B](https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF) (Q4_K_M) in llama.cpp's `llama-server` (build b11960, OpenAI Realtime protocol on port 9931). The backend downloads both (about 1.4 GB) the first time you start Live and runs the server itself. English only, and less precise than Gemini Live at choosing when to hand tasks to your agents, so Gemini Live stays the default; pick LFM in Settings → Live Voice for a fully local voice. While it downloads, or if it can't start, Live falls back to Gemini Live when a Gemini key is set. Already run your own LFM server? Point Settings → Live Voice at it (`LFM_REALTIME_URL`).
+- **Live voice (LFM3-Audio), an option that runs on your own computer**: Liquid AI's [LFM3-Audio-2B](https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF) (Q4_K_M) in llama.cpp's `llama-server` (build b11960, OpenAI Realtime protocol on port 9931). The backend downloads both (about 1.4 GB) the first time you start Live and runs the server itself. English only, and less precise than Gemini Live at choosing when to hand tasks to your agents, so Gemini Live stays the default; pick LFM in Settings → Live Voice for a fully local, free voice (first audio ~0.3–0.9 s on Apple Silicon). It still delegates, acts on your phone and shows cards: see [how LFM turns work](#lfm-voice). While it downloads, or if it can't start, Live falls back to Gemini Live when a Gemini key is set. Already run your own LFM server? Point Settings → Live Voice at it (`LFM_REALTIME_URL`).
 - **Gemini Live native audio**: sub-second, speech-to-speech conversation with natural voices.
 - **Or OpenAI Realtime** (`gpt-realtime-2.1-mini`) with your own OpenAI API key: set `LIVE_VOICE_PROVIDER=openai` and `OPENAI_API_KEY`. Same tools (agents, phone actions, cards), plus a web-search tool.
 - **Barge-in**: talk over Jarvis and it yields, like a real conversation.
@@ -193,6 +193,31 @@ voice_engine/venv/bin/pip install -r voice_engine/requirements.txt
 `boot.sh` starts it automatically on port 8001 once the venv exists.
 </details>
 
+<details id="lfm-voice">
+<summary><b>Voice: LFM3-Audio on your own computer</b></summary>
+
+Pick **LFM** in Settings → Live Voice. The first time Live starts, the backend
+(`backend/voice/lfmRuntime.js`) downloads llama.cpp **b11960** for your platform (Metal, CUDA,
+Vulkan or CPU) and [LFM3-Audio-2B](https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF) (Q4_K_M +
+audio projector, ~1.4 GB) into the data folder, then starts and supervises `llama-server` on
+`ws://127.0.0.1:9931/v1/realtime`. Settings shows the progress and a **Download voice model**
+button. Already running `llama-server` there (`scripts/start_lfm.sh`)? It is reused. Your own
+server elsewhere: `LFM_REALTIME_URL` (+ `LFM_API_KEY`).
+
+How a turn works (`backend/conversation/providers/LFMRealtimeProvider.js`): llama.cpp's
+realtime server only lets the model call tools in a **text-only** response, so each turn runs
+twice — a quick text **decision** (a tool, or `reply_directly` to just talk), then a **spoken**
+answer after the tool's output. A delegation starts in the background, Jarvis says it's on it,
+and the agent's answer is spoken when it comes back. Guards for a 2B model: explicit routing
+rules (prices and weather → cards, phone things → `phone_action`, only computer work → the
+agent), a task that is really a timer / price / weather is sent back once to the right tool,
+the same task is never delegated twice within 90 s, and while Jarvis talks, barge-in needs a
+clearly louder voice so its own echo can't become a new turn (the mic stays open).
+
+Limits: English only; no camera / screen vision; weaker general knowledge than Gemini. When the
+model isn't ready (downloading, can't start), Live falls back to Gemini Live if a key is set.
+</details>
+
 <details>
 <summary><b>Agents</b></summary>
 
@@ -285,7 +310,7 @@ Everything lives in `.env` (see [`.env.example`](.env.example)); every setting i
 | `API_KEY` | Key every client must send. If unset, a random one is generated and printed at startup |
 | `GEMINI_API_KEY` | Gemini Live voice and the avatar's conversation engine |
 | `LFM_REALTIME_URL`, `LFM_API_KEY` | Your own LFM3-Audio Realtime server (`ws://…/v1/realtime`, optional Bearer key) instead of the one Jarvis downloads and starts on this computer |
-| `LIVE_VOICE_PROVIDER`, `OPENAI_API_KEY` | `gemini` (default), `lfm`, or `openai` + your OpenAI key: the orb's live voice through LFM3-Audio, Gemini Live or OpenAI Realtime (`OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE` optional) |
+| `LIVE_VOICE_PROVIDER`, `OPENAI_API_KEY` | `gemini` (default), `lfm`, or `openai` + your OpenAI key: the orb's live voice through Gemini Live, LFM3-Audio or OpenAI Realtime (`OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE` optional) |
 | `OLLAMA_SERVERS` | Comma-separated Ollama URLs (default `http://localhost:11434`) |
 | `STREAMER_URL` | Live-avatar streamer (default: this machine) |
 | `STT_URL` | RealtimeSTT server (default `ws://localhost:8001`) |
