@@ -40,6 +40,47 @@ const HISTORY_TURNS = 6;
 // A Cloud session holds one of a GPU's few LFM slots: closed after this long without talking,
 // opened again when the user speaks.
 const CLOUD_IDLE_MS = Number(process.env.LFM_CLOUD_IDLE_MS) || 90_000;
+// While Jarvis's voice plays (and just after), its echo can reach the mic: talking over it takes
+// a louder, longer voice. The mic stays open (barge-in works), it just needs to be clearly you.
+const ECHO_TAIL_MS = 1000;
+const ECHO_LOUDER = 3;
+const ECHO_MIN_SPEECH_MS = 350;
+// The same task asked again this soon is not run again (an echo, or the model retrying a failure).
+const REPEAT_TASK_MS = 90_000;
+
+/** The 2B model's choices, spelled out: it follows explicit rules far better than hints. */
+export const LFM_RULES = `How to choose (follow exactly):
+- Greetings, thanks, small talk, opinions, jokes, general knowledge: call reply_directly.
+- The weather, or the price of a stock, a crypto (Bitcoin, Ethereum…) or a currency: call show_card. Never delegate these.
+- News, events, opening hours, sports results, facts you don't know: call search_web.
+- Phone things (alarm, timer, reminder, call, message, music, phone settings): call phone_action.
+- Only work on the user's computer (apps, files, folders, browsing, coding, long research) is delegated. The task is the user's request written as an instruction ("Open Spotify and play jazz"), never a description of the conversation.
+- When an agent fails, tell the user what happened. Never delegate the same task again unless the user asks again.
+
+`;
+
+/**
+ * A "computer task" that is really a phone action, a price or the weather: the 2B model sends
+ * those to the agent after a few delegations in a conversation. The tool it should call, or null.
+ */
+export function misroutedTask(task) {
+  const t = String(task || '');
+  if (/\b(timer|alarm|remind me|reminder|wake me)\b/i.test(t)) return PHONE_ACTION_TOOL.name;
+  if (/\b(weather|forecast|temperature)\b/i.test(t)) return SHOW_CARD_TOOL.name;
+  const asset = /\b(bitcoin|btc|ethereum|eth|crypto|solana|dogecoin|stocks?|shares|exchange rate)\b/i;
+  if (asset.test(t) && /\b(price|cost|worth|value|how much|trading|quote)\b/i.test(t)) return SHOW_CARD_TOOL.name;
+  return null;
+}
+
+/** Words of a task, to spot the same task asked twice. */
+const taskWords = (t) => new Set(String(t || '').toLowerCase().match(/[a-z0-9à-ÿ]+/g)?.filter((w) => w.length > 2) || []);
+export function sameTask(a, b) {
+  const x = taskWords(a), y = taskWords(b);
+  if (!x.size || !y.size) return false;
+  let common = 0;
+  for (const w of x) if (y.has(w)) common += 1;
+  return common / Math.min(x.size, y.size) >= 0.6;
+}
 
 /** Talking without a tool: in a text decision the 2B model always reaches for a tool, so it gets one. */
 export const REPLY_TOOL = {
@@ -133,6 +174,8 @@ export class LFMRealtimeProvider {
     this.parked = false; // an idle Cloud session closed on purpose (see park)
     this.idleTimer = null;
     this.delegations = 0; // agent tasks still running: their answer must be spoken
+    this.recentTasks = []; // [{ task, at, result }] for REPEAT_TASK_MS
+    this.lastAudioAt = 0;
 
     // Responses: phase 'warmup' | 'decide' | 'speak' of the one in flight (the server runs one at a time).
     this.responding = null;
@@ -180,14 +223,15 @@ export class LFMRealtimeProvider {
     const pcm16 = resample24kTo16k(pcm24k);
     if (!pcm16.length) return false;
     const ms = pcm16.length / BYTES_PER_MS_16K;
-    const loud = calculateRms(pcm16) >= this.vadThreshold;
+    const echo = this.echoLikely();
+    const loud = calculateRms(pcm16) >= this.vadThreshold * (echo && !this.speechActive ? ECHO_LOUDER : 1);
 
     if (!this.speechActive) {
       this.preroll.push(pcm16);
       this.prerollBytes += pcm16.length;
       while (this.prerollBytes - this.preroll[0].length >= PREROLL_MS * BYTES_PER_MS_16K) this.prerollBytes -= this.preroll.shift().length;
       this.loudMs = loud ? this.loudMs + ms : 0;
-      if (this.loudMs < MIN_SPEECH_MS) return true;
+      if (this.loudMs < (echo ? ECHO_MIN_SPEECH_MS : MIN_SPEECH_MS)) return true;
       this.startUtterance();
       return true;
     }
@@ -220,6 +264,7 @@ export class LFMRealtimeProvider {
   }
 
   endUtterance() {
+    this.redirected = false;
     const voiced = this.utteranceMs - this.silenceMs;
     this.speechActive = false;
     this.silenceMs = 0;
@@ -339,7 +384,7 @@ export class LFMRealtimeProvider {
         session: {
           type: 'realtime',
           model: this.modelGetter(),
-          instructions: realtimeInstruction(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null }),
+          instructions: LFM_RULES + realtimeInstruction(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null }),
           output_modalities: ['text'],
           audio: {
             input: { format: { type: 'audio/pcm', rate: 16000 } },
@@ -474,6 +519,12 @@ export class LFMRealtimeProvider {
     return !!this.playing && Date.now() < this.playing.startedAt + this.playing.ms + 300;
   }
 
+  /** Jarvis is talking, or just stopped: what the mic hears may be its own voice. */
+  echoLikely() {
+    const p = this.playing;
+    return !!p && Date.now() < p.startedAt + p.ms + ECHO_TAIL_MS;
+  }
+
   interrupt() {
     this.broadcast({ type: 'gemini_live_interrupt' });
     this.playing = null;
@@ -566,6 +617,7 @@ export class LFMRealtimeProvider {
     // An agent that answers at once still answers after its tool output.
     let outputsSent;
     const sent = new Promise((resolve) => { outputsSent = resolve; });
+    let redecide = false;
     const outputs = await Promise.all(calls.map(async (call) => {
       let args = {};
       try { args = JSON.parse(call.arguments || '{}'); } catch {}
@@ -574,8 +626,23 @@ export class LFMRealtimeProvider {
 
       if (name === REPLY_TOOL.name) {
         output = { ok: true, note: 'Answer the user now, out loud, in one or two short sentences.' };
+      } else if (name === `delegate_to_${this.targetAgent}` && !this.redirected && misroutedTask(args.task)) {
+        // Once per turn: the model chooses again, with the right tool named.
+        const tool = misroutedTask(args.task);
+        this.redirected = true;
+        redecide = true;
+        this.broadcastLog(`[LFM REALTIME] Not a computer task, asking for ${tool}: ${args.task}`);
+        output = { error: `This is not a task for the computer. Call ${tool} for it now.` };
+      } else if (name === `delegate_to_${this.targetAgent}` && this.repeatOf(String(args.task || ''))) {
+        const prev = this.repeatOf(String(args.task || ''));
+        this.broadcastLog(`[LFM REALTIME] Not delegating again (asked ${Math.round((Date.now() - prev.at) / 1000)} s ago): ${args.task}`);
+        output = prev.result == null
+          ? { status: 'already_running', note: 'This task is already running. Tell the user you are still on it; the answer arrives as a message.' }
+          : { status: 'just_finished', result: String(prev.result).slice(0, 1500), note: 'This task just ran. Tell the user its result; do not run it again unless they ask again.' };
       } else if (name === `delegate_to_${this.targetAgent}`) {
         const task = String(args.task || '');
+        const entry = { task, at: Date.now(), result: null };
+        this.recentTasks.push(entry);
         this.broadcastLog(`[LFM REALTIME] Delegating to ${this.targetAgent.toUpperCase()}: ${task}`);
         this.delegations += 1;
         (async () => {
@@ -586,6 +653,7 @@ export class LFMRealtimeProvider {
             raw = `The agent failed: ${e.message}`;
           }
           this.delegations -= 1;
+          entry.result = raw || 'Done.';
           const text = raw && raw.length > 5000 ? `${raw.substring(0, 5000)}... [TRUNCATED DUE TO LENGTH]` : raw;
           await sent;
           this.forSpeaker(() => this.deliverResult(task, text));
@@ -615,7 +683,7 @@ export class LFMRealtimeProvider {
         this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `(Result of ${call.name}) ${JSON.stringify(output)}` }] } });
       }
     }
-    this.request('speak');
+    this.request(redecide ? 'decide' : 'speak');
     outputsSent();
   }
 
@@ -635,11 +703,19 @@ export class LFMRealtimeProvider {
   sendUserText(text) {
     if (!this.session) return false;
     this.active();
+    this.redirected = false;
     if (this.responding || this.audioPlaying()) this.interrupt();
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
     this.remember('user', text);
     this.request('decide');
     return true;
+  }
+
+  /** The same task delegated less than REPEAT_TASK_MS ago, if any. */
+  repeatOf(task) {
+    const now = Date.now();
+    this.recentTasks = this.recentTasks.filter((t) => now - t.at < REPEAT_TASK_MS);
+    return this.recentTasks.find((t) => sameTask(t.task, task)) || null;
   }
 
   /** Talk happened: a Cloud session stays open CLOUD_IDLE_MS more. */

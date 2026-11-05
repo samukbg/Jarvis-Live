@@ -218,8 +218,7 @@ test('barge-in: speech during a spoken reply interrupts it; a decision is only c
   await tick();
   ws.server({ type: 'response.output_audio.delta', delta: Buffer.alloc(48000).toString('base64'), item_id: 'i1' });
   ws.clear();
-  p.sendAudio(loud(80));
-  p.sendAudio(loud(80));
+  for (let i = 0; i < 5; i++) p.sendAudio(loud(80)); // 400 ms of clear speech
   assert.ok(out.messages.some((m) => m.type === 'gemini_live_interrupt'));
   assert.ok(ws.types().includes('response.cancel'));
 
@@ -338,4 +337,66 @@ test('a local session is never parked', async () => {
   const { p } = await connected();
   p.park();
   assert.ok(p.session);
+});
+
+test('the same task asked again within 90 s is not delegated twice (echo / retry loops)', async () => {
+  const { p, ws, out } = await connected({ delegateToAgent: async (t) => { out.delegated.push(t); return 'The agent failed: quota reached.'; } });
+  p.sendUserText('Find flights to Lisbon');
+  decision(ws, [call('delegate_to_agy', { task: 'Find cheap flights to Lisbon' })]);
+  await tick();
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } });
+  await tick(); await tick();
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } }); // the result, spoken
+  p.sendUserText('find flights to lisbon');
+  ws.clear();
+  decision(ws, [call('delegate_to_agy', { task: 'Find flights to Lisbon now' }, 'c2')]);
+  await tick();
+  assert.equal(out.delegated.length, 1);
+  const fo = JSON.parse(ws.sent.find((e) => e.item?.type === 'function_call_output').item.output);
+  assert.equal(fo.status, 'just_finished');
+  assert.match(fo.result, /quota/);
+});
+
+test('while Jarvis talks, quiet sound (its echo) is not a new turn; a clear voice still barges in', async () => {
+  const { p, ws, out } = await connected();
+  p.sendUserText('Tell me a story');
+  decision(ws, [call('reply_directly')]);
+  await tick();
+  ws.server({ type: 'response.output_audio.delta', delta: Buffer.alloc(48000 * 5).toString('base64'), item_id: 'i1' });
+  ws.clear();
+  const echo = (ms) => { const b = Buffer.alloc(ms * 48); for (let i = 0; i < b.length; i += 2) b.writeInt16LE(i % 4 ? 600 : -600, i); return b; };
+  for (let i = 0; i < 20; i++) p.sendAudio(echo(40)); // RMS 600: speech normally, echo here
+  assert.ok(!out.messages.some((m) => m.type === 'gemini_live_interrupt'));
+  for (let i = 0; i < 10; i++) p.sendAudio(loud(40)); // RMS 2000 for 400 ms: the user
+  assert.ok(out.messages.some((m) => m.type === 'gemini_live_interrupt'));
+});
+
+test('sameTask matches rewordings, not different tasks', async () => {
+  const { sameTask } = await import('./LFMRealtimeProvider.js');
+  assert.equal(sameTask('Find the current Bitcoin price', 'find bitcoin price now'), true);
+  assert.equal(sameTask('Open Spotify and play jazz', 'Create a folder called invoices'), false);
+});
+
+test('a delegated timer / price is sent back once so the model calls the right tool', async () => {
+  const { p, ws, out } = await connected();
+  p.sendUserText('Set a timer for five minutes');
+  ws.clear();
+  decision(ws, [call('delegate_to_agy', { task: 'Set a timer for five minutes.' })]);
+  await tick();
+  assert.deepEqual(out.delegated, []);
+  assert.match(ws.sent.find((e) => e.item?.type === 'function_call_output').item.output, /phone_action/);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text']); // decide again
+  // Delegated again in the same turn: it runs (no endless bounce).
+  decision(ws, [call('delegate_to_agy', { task: 'Set a timer for five minutes.' }, 'c2')]);
+  await tick();
+  assert.deepEqual(out.delegated, ['Set a timer for five minutes.']);
+});
+
+test('misroutedTask', async () => {
+  const { misroutedTask } = await import('./LFMRealtimeProvider.js');
+  assert.equal(misroutedTask('Find the current Bitcoin price'), 'show_card');
+  assert.equal(misroutedTask('Remind me to buy milk at 6 pm'), 'phone_action');
+  assert.equal(misroutedTask("What's the weather in Lisbon"), 'show_card');
+  assert.equal(misroutedTask('Open Spotify and play jazz'), null);
+  assert.equal(misroutedTask('Write a script that tracks bitcoin prices into a CSV'), null);
 });
