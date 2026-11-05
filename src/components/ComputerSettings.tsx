@@ -1,9 +1,9 @@
 // Settings → Live avatar → Avatar server (the server's owner only): your own AVTR-1 server, or the
 // server's default streamer. Saved on the server, so every device uses the same one.
 import React, { useCallback, useEffect, useState } from 'react';
-import { Server, Check, AlertTriangle, Loader2, type LucideIcon } from 'lucide-react';
+import { Server, Check, AlertTriangle, Loader2, Mic, type LucideIcon } from 'lucide-react';
 import { useStore, API_KEY } from '../store';
-import { Pressable, palette } from '../ui';
+import { Pressable, palette, SegmentedControl, alpha } from '../ui';
 import { Section } from './SettingsSection';
 
 interface AvatarSource {
@@ -116,6 +116,122 @@ const AvatarServerForm: React.FC<{ source: AvatarSource; onSaved: (s: AvatarSour
           {saving ? 'Checking…' : 'Use this server'}
         </Button>
       </div>
+    </Section>
+  );
+};
+
+interface VoiceStatus {
+  provider: VoiceProvider;
+  source: 'own' | 'local' | 'none';
+  hasOwnKey: boolean;
+  hasOpenAIKey: boolean;
+  openaiModel?: string;
+  lfmModel?: string;
+  lfmUrl?: string;
+}
+
+type VoiceProvider = 'lfm' | 'gemini' | 'openai';
+
+/** Where the orb's live voice comes from: LFM Realtime (default), Gemini Live (2nd), OpenAI Realtime (3rd). */
+export const VoiceSection: React.FC<{ open: boolean }> = ({ open }) => {
+  const { data: voice, setData, base } = useServerJson<VoiceStatus>('/api/voice/status', open);
+  if (!voice) return null;
+  return <VoiceForm key={`${voice.source}-${voice.provider}`} voice={voice} onSaved={setData} base={base} />;
+};
+
+const VoiceForm: React.FC<{ voice: VoiceStatus; onSaved: (v: VoiceStatus) => void; base: string }> = ({ voice, onSaved, base }) => {
+  const provider: VoiceProvider = voice.provider || 'lfm';
+  const [tab, setTab] = useState<VoiceProvider>(provider);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const post = async (path: string, body: object): Promise<VoiceStatus | null> => {
+    const r = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  };
+
+  const use = (p: VoiceProvider) => {
+    setSaving(true);
+    setError(null);
+    post('/api/voice/provider', { provider: p })
+      .then((v) => { if (v) onSaved(v); })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setSaving(false));
+  };
+
+  const label = provider === 'lfm'
+    ? 'Local LFM (llama.cpp)'
+    : provider === 'openai' ? 'OpenAI Realtime'
+    : voice.source === 'own' ? 'Your Gemini key' : 'Not set up';
+
+  return (
+    <Section title="Live Voice" aside={<span className="t-footnote" style={{ color: palette.success }}>{label}</span>}>
+      <SegmentedControl<VoiceProvider>
+        label="Live voice"
+        value={tab}
+        onChange={(t) => { setTab(t); setError(null); }}
+        segments={[
+          { key: 'lfm', label: 'LFM Realtime (Default)' },
+          { key: 'gemini', label: 'Gemini Live' },
+          { key: 'openai', label: 'OpenAI Realtime' },
+        ]}
+      />
+      {tab === 'lfm' ? (
+        <>
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-[12px]" style={{ background: alpha(palette.accent, 30), color: palette.accent }}>
+              <Mic size={20} />
+            </div>
+            <p className="t-footnote flex-1" style={{ color: palette.textTertiary }}>
+              The orb talks through Liquid AI’s LFM3-Audio Realtime model running locally on this machine via llama.cpp (port 9931). Ultra-low latency conversational voice with native task delegation and complete local privacy.
+            </p>
+          </div>
+          {provider !== 'lfm' && (
+            <div className="flex justify-end">
+              <Button primary onClick={() => use('lfm')} disabled={saving}>Set as default live voice</Button>
+            </div>
+          )}
+        </>
+      ) : tab === 'gemini' ? (
+        <>
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-[12px]" style={{ background: alpha(palette.accent, 30), color: palette.accent }}>
+              <Mic size={20} />
+            </div>
+            <p className="t-footnote flex-1" style={{ color: palette.textTertiary }}>
+              The orb talks through Google Gemini Live using GEMINI_API_KEY from backend/.env.
+            </p>
+          </div>
+          {provider !== 'gemini' && (
+            <div className="flex justify-end">
+              <Button primary onClick={() => use('gemini')} disabled={saving}>Use Gemini Live</Button>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-[12px]" style={{ background: alpha(palette.accent, 30), color: palette.accent }}>
+              <Mic size={20} />
+            </div>
+            <p className="t-footnote flex-1" style={{ color: palette.textTertiary }}>
+              Talk through OpenAI Realtime ({voice.openaiModel || 'gpt-realtime-2.1-mini'}) using OPENAI_API_KEY from backend/.env.
+            </p>
+          </div>
+          {provider !== 'openai' && (
+            <div className="flex justify-end">
+              <Button primary onClick={() => use('openai')} disabled={saving}>Use OpenAI Realtime</Button>
+            </div>
+          )}
+        </>
+      )}
+      {error && <Note tone="warn">{error}</Note>}
     </Section>
   );
 };

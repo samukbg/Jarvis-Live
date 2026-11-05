@@ -46,6 +46,7 @@ import { SELF_HOSTED_REASON } from './calendar/googleAuth.js';
 import { BUSINESS_PROMPT, BUSINESS_TOOL } from './business/card.js';
 import { GeminiLiveProvider } from './conversation/providers/GeminiLiveProvider.js';
 import { OpenAIRealtimeProvider } from './conversation/providers/OpenAIRealtimeProvider.js';
+import { LFMRealtimeProvider, DEFAULT_LFM_MODEL, DEFAULT_LOCAL_URL } from './conversation/providers/LFMRealtimeProvider.js';
 import { PhoneBridge, PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from './device/phoneActions.js';
 import { isAuthorized, requestKey } from './shared/auth.js';
 import { callbackUrl, createAvatarSource, lanAddress } from './avatar/avatarSource.js';
@@ -1141,18 +1142,12 @@ function handleClientMessage(ws, message, isBinary) {
       }
     }
 
-    if (geminiLiveMode && useOpenAIVoice()) {
-      // OpenAI Realtime: held while the session (re)connects, then sent.
-      openaiRealtimeProvider.sendAudio(payload);
-    } else if (geminiLiveMode && geminiLiveProvider.session) {
-      try {
-        geminiLiveProvider.session.sendRealtimeInput({
-          audio: {
-            data: payload.toString('base64'),
-            mimeType: 'audio/pcm;rate=24000'
-          }
-        });
-      } catch(e) {}
+    // Discard empty or partial audio samples (16-bit PCM requires even byte length)
+    if (payload.length < 2) return;
+    if (payload.length % 2 !== 0) payload = payload.subarray(0, payload.length - 1);
+
+    if (geminiLiveMode) {
+      liveVoice().sendAudio(payload);
     } else {
       // Gemini Live off: the mic audio goes to RealtimeSTT (STT_URL) for the agents. (This read
       // `sttProxy.ws`, which never existed: the audio was dropped even with RealtimeSTT running.)
@@ -1727,12 +1722,43 @@ const liveVoiceOptions = {
   speak: speak
 };
 const geminiLiveProvider = new GeminiLiveProvider({ ...liveVoiceOptions, createClient: createGeminiClient });
-// The second live voice: OpenAI Realtime (gpt-realtime-2.1-mini) with your own OpenAI key —
+// The third live voice: OpenAI Realtime (gpt-realtime-2.1-mini) with your own OpenAI key —
 // LIVE_VOICE_PROVIDER=openai and OPENAI_API_KEY in .env.
 const openaiRealtimeProvider = new OpenAIRealtimeProvider(liveVoiceOptions);
-/** OpenAI Realtime when chosen and its key is set, else Gemini Live. */
-const useOpenAIVoice = () => process.env.LIVE_VOICE_PROVIDER === 'openai' && !!process.env.OPENAI_API_KEY;
-const liveVoice = () => (useOpenAIVoice() ? openaiRealtimeProvider : geminiLiveProvider);
+// The primary default live voice: Liquid AI LFM3-Audio Realtime (local or Jarvis Cloud).
+const lfmRealtimeProvider = new LFMRealtimeProvider({
+  ...liveVoiceOptions,
+  cloudLink: null,
+  fallbackToGemini: () => {
+    if (geminiLiveMode) {
+      geminiLiveProvider.connect(activeModel);
+    }
+  },
+});
+
+/**
+ * Active live voice provider:
+ * 1st (default): LFM Realtime (Liquid AI LFM3-Audio via local llama.cpp)
+ * 2nd: Gemini Live (Google AI Studio)
+ * 3rd: OpenAI Realtime (OpenAI API key)
+ */
+function activeVoiceProvider() {
+  const pref = (process.env.LIVE_VOICE_PROVIDER || 'lfm').toLowerCase();
+  if (pref === 'openai') {
+    if (process.env.OPENAI_API_KEY) return 'openai';
+    return 'gemini';
+  }
+  if (pref === 'gemini') return 'gemini';
+  return 'lfm';
+}
+
+const useOpenAIVoice = () => activeVoiceProvider() === 'openai';
+const liveVoice = () => {
+  const p = activeVoiceProvider();
+  if (p === 'openai') return openaiRealtimeProvider;
+  if (p === 'gemini') return geminiLiveProvider;
+  return lfmRealtimeProvider;
+};
 function handleGeminiCommand(command, source = 'text') {
   return agyWorker.handleCommand(command, source);
 }
@@ -2721,13 +2747,66 @@ async function syncGeminiLiveState() {
   const shouldConnect = geminiLiveMode;
   
   const voice = liveVoice();
-  (voice === geminiLiveProvider ? openaiRealtimeProvider : geminiLiveProvider).disconnect();
+  if (voice !== geminiLiveProvider) geminiLiveProvider.disconnect();
+  if (voice !== openaiRealtimeProvider) openaiRealtimeProvider.disconnect();
+  if (voice !== lfmRealtimeProvider) lfmRealtimeProvider.disconnect();
   if (shouldConnect) {
     voice.connect(activeModel);
   } else {
     voice.disconnect();
   }
 }
+
+const ENV_FILE = process.env.JARVIS_HOME ? path.join(process.env.JARVIS_HOME, '.env') : path.resolve(__dirname, '../.env');
+const voiceView = () => {
+  const prov = activeVoiceProvider();
+  return {
+    provider: prov,
+    source: prov === 'lfm'
+      ? 'local'
+      : (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY ? 'own' : 'none'),
+    hasOwnKey: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+    hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+    openaiModel: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1-mini',
+    lfmModel: process.env.LFM_MODEL || DEFAULT_LFM_MODEL,
+    lfmUrl: process.env.LFM_REALTIME_URL || DEFAULT_LOCAL_URL,
+    cloudLinked: false,
+    machine: false,
+  };
+};
+
+function restartLiveVoice() {
+  lfmRealtimeProvider.disconnect();
+  geminiLiveProvider.disconnect();
+  openaiRealtimeProvider.disconnect();
+  if (geminiLiveMode) syncGeminiLiveState();
+}
+
+app.get('/api/voice/status', (req, res) => {
+  res.json(voiceView());
+});
+
+app.post('/api/voice/provider', (req, res) => {
+  const rawProvider = String(req.body?.provider || '').toLowerCase();
+  let provider = 'lfm';
+  if (rawProvider === 'openai') {
+    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'Add your OpenAI API key first.' });
+    provider = 'openai';
+  } else if (rawProvider === 'gemini') {
+    provider = 'gemini';
+  } else {
+    provider = 'lfm';
+  }
+  try {
+    process.env.LIVE_VOICE_PROVIDER = provider;
+    const label = provider === 'lfm' ? 'LFM Realtime (Default)' : provider === 'gemini' ? 'Gemini Live' : 'OpenAI Realtime';
+    broadcastLog(`[VOICE] Live voice: ${label}`);
+    restartLiveVoice();
+    res.json(voiceView());
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 // ── Start ───────────────────────────────────────────────────────────────────
 server.listen(port, () => {

@@ -8,7 +8,7 @@ echo [ JARVIS LIVE ]
 
 rem 1. Cleanup existing processes
 echo ^> Purging local ports and orphan links...
-powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { 11433,4000,8000,8001,7860,8080,8081,8998,8901,8010 -contains $_.LocalPort } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { 11433,4000,8000,8001,7860,8080,8081,8998,8901,8010,9931 -contains $_.LocalPort } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
 rem Restart WSL so the renderer starts on a clean GPU - see clean_wsl.py.
 wsl --shutdown >nul 2>&1
 
@@ -50,6 +50,12 @@ goto :streamer_done
 echo ^> streamer_win_env is not installed - live avatar off on this machine.
 :streamer_done
 
+rem 2d. Start Liquid AI LFM Realtime Voice (Port 9931) if model exists
+if exist models\lfm\LFM3-Audio-2B-Q4_K_M.gguf (
+    echo ^> Starting Liquid AI LFM Realtime Voice Engine (Port 9931)...
+    start /B cmd /c "llama-server -m models\lfm\LFM3-Audio-2B-Q4_K_M.gguf -mm models\lfm\mmproj-LFM3-Audio-2B-Q8_0.gguf --host 127.0.0.1 --port 9931 --jinja > lfm.log 2>&1"
+)
+
 rem 3. Start Orchestration Backend (Node.js)
 echo ^> Activating Neural Orchestrator (Port 4000)...
 cd backend
@@ -67,7 +73,7 @@ echo Press ANY KEY to shutdown all local services.
 pause >nul
 
 echo ^> Shutting down JARVIS...
-powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { 11433,4000,8000,8001,7860,8080,8081,8998,8901,8010 -contains $_.LocalPort } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { 11433,4000,8000,8001,7860,8080,8081,8998,8901,8010,9931 -contains $_.LocalPort } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
 wsl --shutdown >nul 2>&1
 
 echo Shutdown complete.

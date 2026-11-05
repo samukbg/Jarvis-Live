@@ -57,6 +57,39 @@ export function liveTools(agent, { calendar = false } = {}) {
   ];
 }
 
+/** One line per message sent on a session (audio collapsed into a count), kept for a 1007. */
+export function describeSend(name, msg) {
+  if (name === 'sendRealtimeInput') {
+    if (msg?.audio) return 'audio';
+    if (msg?.video) return `video ${msg.video.mimeType} ${msg.video.data?.length ?? 0} b64 chars`;
+    return `realtime ${Object.keys(msg || {}).join(',')}`;
+  }
+  if (name === 'sendToolResponse') {
+    return `toolResponse ${(msg?.functionResponses || []).map((r) => `${r.name}#${r.id} ${r.scheduling || ''} ${JSON.stringify(r.response || {}).length} chars`).join('; ')}`;
+  }
+  return `clientContent ${(msg?.turns || []).map((t) => `${t.role}:${(t.parts || []).map((x) => (x.text != null ? `text(${x.text.length})` : Object.keys(x).join('+'))).join(',')}`).join(' ')} complete=${!!msg?.turnComplete}`;
+}
+
+/** Wraps a session's send methods to remember the last messages (see describeSend). */
+export function traceSends(session, max = 12) {
+  const recent = [];
+  for (const name of ['sendRealtimeInput', 'sendToolResponse', 'sendClientContent']) {
+    const fn = session?.[name];
+    if (typeof fn !== 'function') continue;
+    session[name] = (msg) => {
+      const line = describeSend(name, msg);
+      const last = recent[recent.length - 1];
+      if (line === 'audio' && last?.startsWith('audio')) recent[recent.length - 1] = `audio ×${(Number(last.split('×')[1]) || 1) + 1}`;
+      else {
+        recent.push(`${new Date().toISOString().slice(11, 23)} ${line}`.replace(/^\S+ audio$/, 'audio'));
+        if (recent.length > max) recent.shift();
+      }
+      return fn.call(session, msg);
+    };
+  }
+  return recent;
+}
+
 export class GeminiLiveProvider {
   constructor(options) {
     this.createClient = options.createClient;
@@ -116,6 +149,7 @@ export class GeminiLiveProvider {
     
     this.connecting = true;
     this.targetAgent = targetAgent;
+    let recent = [];
 
     try {
       console.log('[GEMINI] Connecting to Live API...');
@@ -297,14 +331,17 @@ export class GeminiLiveProvider {
             const closeMsg = `[GEMINI] Live Session Closed — code:${e.code} reason:${e.reason || 'none'}`;
             console.log(closeMsg);
             this.broadcastLog(closeMsg);
+            if (e.code === 1007 && recent.length) console.log(`[GEMINI] Last sends before ${e.code}:\n  ${recent.join('\n  ')}`);
             this.session = null;
             closedBeforeReady();
           }
         }
       });
       const session = await Promise.race([opening, closedEarly]);
-      if (session) this.session = session;
-      else opening.then((late) => { try { late?.close(); } catch {} }, () => {});
+      if (session) {
+        this.session = session;
+        recent = traceSends(session);
+      } else opening.then((late) => { try { late?.close(); } catch {} }, () => {});
     } catch (err) {
       console.error('[GEMINI] Connection failed:', err.message);
       this.broadcastLog(`[GEMINI] Connection failed: ${err.message}`);
@@ -321,10 +358,13 @@ export class GeminiLiveProvider {
    * the new one: the answer goes in as a text turn instead of being lost.
    */
   deliverResult(session, fc, task, resultText) {
-    const result = `Task finished. Agent answer:\n${resultText || 'Done.'}`;
+    const safeText = (resultText && resultText.length > 3500)
+      ? `${resultText.substring(0, 3500)}... [TRUNCATED DUE TO LENGTH]`
+      : (resultText || 'Done.');
+    const result = `Task finished. Agent answer:\n${safeText}`;
     try {
       if (session && session === this.session) {
-        console.log(`[GEMINI LIVE] Sending tool response for ${fc.name}... length: ${resultText?.length || 0}`);
+        console.log(`[GEMINI LIVE] Sending tool response for ${fc.name}... length: ${safeText.length}`);
         session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, scheduling: 'WHEN_IDLE', response: { result } }] });
       } else if (this.session?.sendClientContent) {
         console.log(`[GEMINI LIVE] Session changed during ${fc.name}: sending the answer as a text turn`);
@@ -341,6 +381,20 @@ export class GeminiLiveProvider {
       console.error('[GEMINI LIVE] Failed to send tool response:', e);
       this.broadcastLog(`[GEMINI ERROR] Tool Response Failed: ${e.message}`);
     }
+  }
+
+  /** One mic chunk (24 kHz s16 PCM). False when Live voice is off or empty. */
+  sendAudio(pcm) {
+    if (!pcm || pcm.length === 0) return false;
+    if (this.session) {
+      try {
+        this.session.sendRealtimeInput({ audio: { data: pcm.toString('base64'), mimeType: 'audio/pcm;rate=24000' } });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   /** A camera / screen frame (base64): Gemini sees what the user shows. */

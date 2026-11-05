@@ -5,7 +5,7 @@ import { Pressable, Sheet, alpha, palette } from '../ui';
 import { CreateAvatarModal } from './CreateAvatarModal';
 import { AvatarPicker } from './AvatarPicker';
 import { Section } from './SettingsSection';
-import { AvatarServerSection } from './ComputerSettings';
+import { AvatarServerSection, VoiceSection } from './ComputerSettings';
 import { BusinessSettings } from './BusinessSettings';
 import { CalendarSettings } from './CalendarSettings';
 import { WakeSettings } from './WakeSettings';
@@ -195,6 +195,8 @@ export const SettingsOverlay: React.FC = () => {
           <div id="settings-handsfree" className="flex scroll-mt-4 flex-col gap-3">
             <WakeSettings />
           </div>
+
+          <VoiceSection open={settingsOpen} />
 
           <AvatarServerSection open={settingsOpen} />
 
