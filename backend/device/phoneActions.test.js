@@ -98,3 +98,15 @@ test('a sloppy call runs normalized on the phone', async () => {
   assert.equal(await bridge.run({ action: 'wifi', value: 'off' }), 'did settings');
   assert.deepEqual([sent[0].action, sent[0].value], ['settings', 'wifi_off']);
 });
+
+test("only the phone a request went to can answer it, and its id can't be guessed", async () => {
+  const bridge = new PhoneBridge({ timeoutMs: 200 });
+  const { phone, sent } = fakePhone(bridge, { reply: null });
+  const other = { readyState: 1, send() {} };
+  const pending = bridge.run({ action: 'reminder', text: 'x' });
+  const { id } = sent[0];
+  assert.match(id, /^pa[A-Za-z0-9_-]{16}$/);
+  assert.equal(bridge.handleResult({ id, ok: true, result: 'forged' }, other), false);
+  assert.equal(bridge.handleResult({ id, ok: true, result: 'real' }, phone), true);
+  assert.equal(await pending, 'real');
+});

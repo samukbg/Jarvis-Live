@@ -26,7 +26,7 @@ import { TTSEngine } from './tts/TTSEngine.js';
 import { STTProxy } from './stt/STTProxy.js';
 import { AgyWorker } from './hermes/workers/AgyWorker.js';
 import { ClaudeWorker } from './hermes/workers/ClaudeWorker.js';
-import { getCrossPlatformEnv, getCrossPlatformCommand, getSpawnOptions, escapeArg, shellArg } from './shared/osUtils.js';
+import { getCrossPlatformEnv, getCrossPlatformCommand, getSpawnOptions, escapeArg, safeCliName, shellArg } from './shared/osUtils.js';
 import { HermesCLIWorker } from './hermes/workers/HermesCLIWorker.js';
 import { HermesRuntime } from './hermes/HermesRuntime.js';
 import { WorkerRegistry } from './hermes/WorkerRegistry.js';
@@ -49,7 +49,7 @@ import { OpenAIRealtimeProvider } from './conversation/providers/OpenAIRealtimeP
 import { LFMRealtimeProvider, DEFAULT_LFM_MODEL, DEFAULT_LOCAL_URL } from './conversation/providers/LFMRealtimeProvider.js';
 import { createLfmRuntime } from './voice/lfmRuntime.js';
 import { PhoneBridge, PHONE_ACTION_PROMPT, PHONE_ACTION_TOOL } from './device/phoneActions.js';
-import { isAuthorized, requestKey } from './shared/auth.js';
+import { isAuthorized, issueLocalCallbackKey, requestKey } from './shared/auth.js';
 import { callbackUrl, createAvatarSource, lanAddress } from './avatar/avatarSource.js';
 import { createStatusCollector } from './system/serverStatus.js';
 import { createAgentDetector } from './agents/detect.js';
@@ -69,23 +69,22 @@ const execAsync = promisify(exec);
 const app = express();
 const port = process.env.PORT || 4000;
 
-// Enable CORS and JSON body parser FIRST for all routes
+// Enable CORS for all routes (JSON bodies are parsed after the key check, below)
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.resolve(__dirname, '../public')));
 
 // Security layer: the owner's API_KEY (shared/auth.js).
 // Public: static assets, the avatar/background list, ICE servers, models/agents discovery and
 // the server status. Starting avatar sessions needs the key: an open /offer would let anyone
 // on the network take the GPU.
+// Public reads are exact GET routes: a prefix let DELETE /api/avatar/avatars… through unauthenticated.
+// /api/local-image needs the key (the web app adds it): it reads files on this computer.
+const PUBLIC_GETS = new Set(['/avatars', '/api/avatar/avatars', '/ice-servers', '/api/models', '/api/agents']);
+const isPublicGet = (req) => (req.method === 'GET' || req.method === 'HEAD')
+  && (PUBLIC_GETS.has(req.path.replace(/\/+$/, '')) || req.path.startsWith('/avatars/'));
 app.use((req, res, next) => {
   if (
-    req.path.startsWith('/api/local-image') ||
-    req.path.startsWith('/api/avatar/avatars') ||
-    req.path.startsWith('/avatars') ||
-    req.path.startsWith('/ice-servers') ||
-    req.path.startsWith('/api/models') ||
-    req.path.startsWith('/api/agents') ||
+    isPublicGet(req) ||
     req.path === '/api/server/status' ||
     // Calendar: the Google sign-in's redirect (its one-time state) and the agents' local tool
     // calls (a short-lived token, this computer only) — calendar/routes.js checks them.
@@ -103,6 +102,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+// Bodies are parsed only after the key check: 50 MB of JSON from anyone was parsed before it.
+app.use(express.json({ limit: '50mb' }));
 
 // ── Live Avatar Integration & Proxy (AVTR-1) ─────────────────────────
 let audioSeqOut = 0;
@@ -206,7 +207,9 @@ async function fetchFromStreamer(endpointPath, options = {}, reqHost = '') {
       const resp = await fetch(targetUrl, {
         ...options,
         // Your own avatar server, when it's another Jarvis server: its API key.
-        headers: own?.key && base === own.url ? { ...(options.headers || {}), 'x-api-key': own.key } : options.headers,
+        // This server's own streamer (the address the owner configured): this server's key, which the streamer requires.
+        headers: own?.key && base === own.url ? { ...(options.headers || {}), 'x-api-key': own.key }
+          : !own && process.env.API_KEY ? { ...(options.headers || {}), 'x-streamer-key': process.env.API_KEY } : options.headers,
         signal: options.signal || AbortSignal.timeout(12000)
       });
       return resp;
@@ -319,12 +322,15 @@ app.post(['/probe-offer', '/api/avatar/probe-offer', '/api/avatar/probe-offer/']
  * with this server's API_KEY. Only the owner may choose it: anyone else could point it at
  * their own host and collect the key.
  */
-/** pinBackendUrl, except with your own avatar server: it calls this server back with its key. */
+/**
+ * pinBackendUrl, except with your own avatar server: it calls this server back with a callback
+ * key (avatar-callback routes only, expires) — never the API_KEY.
+ */
 function pinCallback(engine, req) {
   const own = ownAvatarServer();
   if (!own || !engine) return pinBackendUrl(engine, req);
   const url = callbackUrl({ target: own.url, port, lan: lanAddress(), tunnelUrl: null, envUrl: process.env.JARVIS_BACKEND_URL });
-  if (url) Object.assign(engine, { jarvis_backend_url: url, jarvis_backend_key: process.env.API_KEY });
+  if (url) Object.assign(engine, { jarvis_backend_url: url, jarvis_backend_key: issueLocalCallbackKey(12 * 3600) });
 }
 
 function pinBackendUrl(engine, req) {
@@ -1231,7 +1237,7 @@ function handleClientMessage(ws, message, isBinary) {
         lastWatchAudioDiag = { ...(data.diag || {}), at: new Date().toISOString() };
       }
       if (data.type === 'device_action_result') {
-        phoneBridge.handleResult(data);
+        phoneBridge.handleResult(data, ws);
       }
       if (data.type === 'set_avatar_mode') {
         avatarModeActive = !!data.enabled;
@@ -1248,6 +1254,8 @@ function handleClientMessage(ws, message, isBinary) {
         broadcast({ type: 'state_sync', activeModel });
       }
       if (data.type === 'set_specific_model') {
+        // These end up on agent command lines (cmd.exe on Windows): names only.
+        if (!/^[a-z][a-z0-9_-]{0,30}$/.test(String(data.agent)) || !safeCliName(data.model)) return;
         selectedModels[data.agent] = data.model;
         console.log(`[STATE] Specific model for ${data.agent.toUpperCase()} set to: ${data.model}`);
         broadcast({ type: 'state_sync', selectedModels });
@@ -1702,7 +1710,7 @@ const workerContext = {
   },
   pickOllamaServer,
   getAgentSession: (agentId) => agentSessions.get(agentId) || '',
-  setAgentSession: (agentId, sid) => agentSessions.set(agentId, sid),
+  setAgentSession: (agentId, sid) => safeCliName(sid) && agentSessions.set(agentId, sid),
   cleanHermesOutput,
   speakAgentResult,
   cleanAgentTask,
@@ -2099,7 +2107,7 @@ User: ${command}`;
             const cleanChunk = chunk;
             if (cleanChunk) {
               const match = cleanChunk.match(/session_id:\s*([^\s]+)/);
-              if (match) agentSessions.set('jarvis', match[1].trim());
+              if (match && safeCliName(match[1].trim())) agentSessions.set('jarvis', match[1].trim());
 
               // Strip out any potential ANSI or session_id from the streaming token
               const strippedToken = cleanChunk.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/^session_id:.*$/gm, '');
@@ -2126,7 +2134,7 @@ User: ${command}`;
             if (line) {
               stderrOutput += (stderrOutput ? '\n' : '') + line;
               const match = line.match(/session_id:\s*([^\s]+)/);
-              if (match) agentSessions.set('jarvis', match[1].trim());
+              if (match && safeCliName(match[1].trim())) agentSessions.set('jarvis', match[1].trim());
               console.error(`[CLI STDERR] ${line}`);
             }
           });
@@ -2221,7 +2229,8 @@ setInterval(async () => {
 
 // ── RSS News Feed ───────────────────────────────────────────────────────────
 // Your news feeds (comma-separated RSS URLs): NEWS_RSS_URLS, or Settings → Integrations. None by default.
-const parseFeeds = (spec) => String(spec || '').split(',').map((s) => s.trim()).filter(Boolean).map((url) => ({ url, tag: 'NEWS' }));
+// Web feeds only (http/https): this server fetches them.
+const parseFeeds = (spec) => String(spec || '').split(',').map((s) => s.trim()).filter((u) => /^https?:\/\/[^\s]+$/i.test(u)).map((url) => ({ url, tag: 'NEWS' }));
 let RSS_FEEDS = parseFeeds(process.env.NEWS_RSS_URLS);
 
 let cachedFeed = [];
@@ -2353,8 +2362,12 @@ async function getHealthData() {
   return { connected: false };
 }
 // ── Local Image Proxy ──────────────────────────────────────────────────────────
+const LOCAL_MEDIA_TYPES = Object.fromEntries(
+  'obj glb gltf stl fbx mp4 webm mov avi mkv mp3 wav ogg m4a aac flac pdf png heic jpg jpeg gif webp svg bmp'.split(' ').map((e) => [e, true]),
+);
+
 const localImageProxyHandler = (req, res) => {
-  const filePath = req.query.path;
+  const filePath = String(req.query.path || '');
   if (!filePath) {
     return res.status(400).json({ error: 'Missing path parameter' });
   }
@@ -2408,6 +2421,9 @@ const localImageProxyHandler = (req, res) => {
     }
   }
 
+  // Never a network share (\\host\share, //host/share): opening one makes Windows log in to that host.
+  if (/^[\\/]{2}/.test(cleanPath)) return res.status(403).json({ error: 'Only files on this computer can be shown' });
+
   // Robust path resolution with fallback searches
   let resolvedPath = path.resolve(cleanPath);
   if (!fs.existsSync(resolvedPath)) {
@@ -2422,8 +2438,14 @@ const localImageProxyHandler = (req, res) => {
     }
   }
 
+  // Media an agent made or downloaded only: never dotfiles or hidden folders (.env, .ssh,
+  // cloud.json's folder…) nor other file types, even with a valid key.
+  const ext = path.extname(resolvedPath).slice(1).toLowerCase();
+  if (!LOCAL_MEDIA_TYPES[ext] || resolvedPath.split(/[\\/]/).some((part) => part.startsWith('.'))) {
+    return res.status(403).json({ error: 'Only media files (images, video, audio, PDF, 3D models) can be shown' });
+  }
+
   if (fs.existsSync(resolvedPath)) {
-    const ext = resolvedPath.split('.').pop()?.toLowerCase();
     const mimeTypes = {
       'obj': 'text/plain; charset=utf-8',
       'glb': 'model/gltf-binary',
@@ -2443,31 +2465,28 @@ const localImageProxyHandler = (req, res) => {
       'flac': 'audio/flac',
       'pdf': 'application/pdf',
       'png': 'image/png',
+      'heic': 'image/heic',
       'jpg': 'image/jpeg',
       'jpeg': 'image/jpeg',
       'gif': 'image/gif',
       'webp': 'image/webp',
       'svg': 'image/svg+xml',
       'bmp': 'image/bmp',
-      'txt': 'text/plain; charset=utf-8',
-      'log': 'text/plain; charset=utf-8',
-      'md': 'text/markdown; charset=utf-8',
-      'json': 'application/json',
-      'csv': 'text/csv; charset=utf-8',
     };
-
-    if (ext && mimeTypes[ext]) {
-      res.set('Content-Type', mimeTypes[ext]);
-    }
+    res.set('Content-Type', mimeTypes[ext]);
     res.set('Accept-Ranges', 'bytes');
+    // Shown as media, never run as a page of this server (an SVG can carry scripts). Not for PDFs:
+    // a sandboxed PDF won't open in the browser's viewer.
+    res.set('X-Content-Type-Options', 'nosniff');
+    if (ext === 'svg') res.set('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox");
 
-    res.sendFile(resolvedPath, { dotfiles: 'allow' }, (err) => {
+    res.sendFile(resolvedPath, (err) => {
       if (err && !res.headersSent) {
         res.status(err.status || 500).json({ error: err.message });
       }
     });
   } else {
-    res.status(404).json({ error: 'File not found', path: cleanPath, resolved: resolvedPath });
+    res.status(404).json({ error: 'File not found' });
   }
 };
 app.get('/api/local-image', localImageProxyHandler);

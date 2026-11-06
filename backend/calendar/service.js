@@ -4,7 +4,7 @@
 // the agenda card.
 //
 // The apps hear `calendar_accounts` (the list, for Settings) whenever an account changes.
-import { CALENDAR_TOOLS, ADD_EVENT_TOOL, AGENDA_TOOL, DELETE_EVENT_TOOL, UPDATE_EVENT_TOOL, agendaData, agendaDigest, agendaText, calendarPrompt, resolveRange, spokenAgenda, timeLabel } from './card.js';
+import { CALENDAR_TOOLS, ADD_EVENT_TOOL, AGENDA_TOOL, DELETE_EVENT_TOOL, UPDATE_EVENT_TOOL, agendaData, agendaDigest, agendaText, calendarPrompt, resolveRange, spokenAgenda, timeLabel, untrustedCalendar } from './card.js';
 import { emailOfIdToken, createGoogleAuth } from './googleAuth.js';
 import { createCaldav, PROVIDERS } from './providers/caldav.js';
 import { connectFeed, downloadFeed, eventsOfText, readFile } from './providers/feed.js';
@@ -19,6 +19,10 @@ export const WINDOW_AHEAD_DAYS = 180;
 export const MAX_DEVICE_EVENTS = 2000;
 export const ORIGINS = ['iphone', 'android', 'watch', 'web'];
 const DAY = 86400_000;
+// A delete is confirmed by a second call for the same event, at least this long after the first
+// (time for the user to answer) and within this window.
+const DELETE_MIN_GAP_MS = 2_500;
+const DELETE_CONFIRM_MS = 3 * 60_000;
 const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
 const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
@@ -44,6 +48,7 @@ export function createCalendarService({
   const refOfKey = new Map();
   let refSeq = 0;
   const agentTokens = new Map(); // token → expiry (agentBrief)
+  const pendingDeletes = new Map(); // 'account|calendar|event' → when the user was asked
   // The next 7 days for the voice models' context (calendarPrompt), rebuilt after every change.
   let digest = null;
   let digestTimer = null;
@@ -601,7 +606,8 @@ export function createCalendarService({
     async runTool(name, args = {}, { origin } = {}) {
       try {
         if (name === AGENDA_TOOL.name) {
-          return (await service.show({ day: args.day, from: args.from, to: args.to, q: args.query, origin, silent: args.show === false })).result;
+          const { result } = await service.show({ day: args.day, from: args.from, to: args.to, q: args.query, origin, silent: args.show === false });
+          return store.list().length ? untrustedCalendar(result) : result;
         }
         if (name === ADD_EVENT_TOOL.name) {
           try {
@@ -635,7 +641,17 @@ export function createCalendarService({
           if (found.none) return `No event matching "${args.event}" in the next 90 days.`;
           if (found.several) return `Several events match: ${found.several.map((e) => `"${e.title}" ${e.start.slice(0, 10)} ${timeLabel(e)} [${refOf(e)}]`).join('; ')}. Ask the user which one.`;
           const e = found.event;
-          if (args.confirmed !== true) return `Not deleted yet. Ask the user to confirm deleting "${e.title}" on ${e.start.slice(0, 10)} ${timeLabel(e)} [${refOf(e)}], then call again with confirmed=true.`;
+          // confirmed=true counts only after this tool asked for that event and the user had time to
+          // answer: the model saying "confirmed" on its own (an invite's text can tell it to) is not enough.
+          const key = `${e.accountId}|${e.calendarId}|${e.id}`;
+          const asked = pendingDeletes.get(key);
+          const t = now();
+          for (const [k, at] of pendingDeletes) if (t - at > DELETE_CONFIRM_MS) pendingDeletes.delete(k);
+          if (args.confirmed !== true || !asked || t - asked < DELETE_MIN_GAP_MS || t - asked > DELETE_CONFIRM_MS) {
+            if (!asked || t - asked > DELETE_CONFIRM_MS) pendingDeletes.set(key, t);
+            return `Not deleted yet. Ask the user to confirm deleting "${e.title}" on ${e.start.slice(0, 10)} ${timeLabel(e)} [${refOf(e)}], wait for their answer, then call again with confirmed=true.`;
+          }
+          pendingDeletes.delete(key);
           await service.deleteEvent({ accountId: e.accountId, calendarId: e.calendarId, eventId: e.id });
           return `Deleted "${e.title}" (${e.start.slice(0, 10)} ${timeLabel(e)}).`;
         }
@@ -675,7 +691,7 @@ export function createCalendarService({
       const base = `http://127.0.0.1:${p}/api/calendar/agent`;
       const curl = (tool, body) => `curl -s -X POST ${base}/${tool} -H 'Content-Type: application/json' -H 'x-calendar-token: ${token}' -d '${JSON.stringify(body)}'`;
       return [
-        spokenAgenda(events, { title: `The user's calendar, next ${days} days`, tz: zone, now: now(), refOf }),
+        untrustedCalendar(spokenAgenda(events, { title: `The user's calendar, next ${days} days`, tz: zone, now: now(), refOf })),
         '',
         `To change the user's calendar, run these commands (times are the user's local time, ${zone}; answer with what they print):`,
         `- add: ${curl('calendar_add_event', { title: 'Lunch with Ana', start: 'YYYY-MM-DDTHH:MM', durationMinutes: 60, location: 'optional' })}`,

@@ -488,7 +488,7 @@ class GeminiApiClient:
         key = getattr(self._config, "jarvis_backend_key", None)
         if url and key:
             return [url.rstrip("/")], {"x-api-key": key}
-        return _get_candidate_host_bases(url), {"x-api-key": _JARVIS_API_KEY}
+        return _get_candidate_host_bases(url), ({"x-api-key": _JARVIS_API_KEY} if _JARVIS_API_KEY else {})
 
     async def _fetch_installed_agents(self) -> set[str] | None:
         """Ids of the agents Jarvis can drive on this server (GET /api/agents), None if unknown."""

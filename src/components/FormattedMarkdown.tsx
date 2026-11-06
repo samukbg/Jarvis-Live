@@ -7,6 +7,15 @@ import { BACKEND_HTTP as STORE_BACKEND_HTTP, API_KEY } from '../store';
 /** The connected server ('' before one is assigned). */
 export const getBackendHttp = (): string => STORE_BACKEND_HTTP.replace(/\/+$/, '');
 
+/**
+ * Link and image URLs from agent/model text: anything but script URLs (javascript:, vbscript:) and
+ * data: other than plain images. File paths (C:/…, /Users/…, file://) stay: they become local media.
+ */
+export const safeMarkdownUrl = (value: string): string => {
+  const v = String(value || '').replace(/[\u0000-\u001f\u007f\s]+/g, '');
+  return /^(javascript|vbscript|data(?!:image\/(png|jpe?g|gif|webp)[;,]))\s*:/i.test(v) ? '' : value;
+};
+
 export const toLocalProxyUrl = (filePath: string): string => {
   let cleanLocal = (filePath || '').trim().replace(/^[`'"<]+|[`'">]+$/g, '');
   const isLocal = /^file:\/+/i.test(cleanLocal) || /^[a-zA-Z]:[\\/]/.test(cleanLocal) || cleanLocal.startsWith('/') || cleanLocal.startsWith('~');
@@ -205,7 +214,9 @@ class ModelErrorBoundary extends React.Component<{ children: React.ReactNode }, 
           onClick={() => !fullscreen && setIsFullscreen(true)}
         >
           {fullscreen ? (
-            <iframe src={finalSrc} className="w-full h-full border-none bg-white" title={displayName} />
+            // Text files (any site's, from an agent's answer) can't run scripts or move the app page;
+            // PDFs keep the browser's viewer, which a sandbox blocks.
+            <iframe src={finalSrc} className="w-full h-full border-none bg-white" title={displayName} {...(isTxt ? { sandbox: 'allow-popups allow-popups-to-escape-sandbox' } : {})} />
           ) : (
             <>
               <ExternalLink size={24} className="mb-2 text-accent-cyan opacity-80" />
@@ -328,7 +339,7 @@ export const FormattedMarkdown: React.FC<FormattedMarkdownProps> = ({
         </div>
       )}
       <ReactMarkdown
-        urlTransform={(value: string) => value}
+        urlTransform={safeMarkdownUrl}
         remarkPlugins={[remarkGfm]}
         components={{
           // Headings

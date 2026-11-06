@@ -19,6 +19,8 @@ Invoke via:
 """
 
 import asyncio
+import hmac
+import re
 import time
 import os
 from enum import Enum
@@ -31,8 +33,10 @@ import typer
 import uvicorn
 from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -254,19 +258,59 @@ async def _run_session(
         log_latency_report()
 
 
+_AVATAR_ID = re.compile(r"[a-z0-9_]{1,64}")
+# What anyone may read (no session, no key): the avatar list, ICE servers, whether it's busy.
+_PUBLIC_GETS = {"/", "/avatars", "/api/avatar/avatars", "/ice-servers", "/api/avatar/ice-servers", "/session-status", "/api/avatar/session-status"}
+_LOOPBACK = {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
+
+
+def _streamer_request_allowed(request: "Request") -> bool:
+    """The Jarvis backend's requests: its API_KEY (x-streamer-key / x-api-key), or from this computer.
+
+    A page open in a browser on this computer also connects from loopback, so a request with a
+    cross-site Origin needs the key too. With no API_KEY set, only this computer's requests pass
+    (a streamer other computers use as their avatar server: set API_KEY and enter it there as the
+    server's key; STREAMER_ALLOW_UNAUTHENTICATED=1 keeps the old open behaviour on a trusted LAN).
+    """
+    if os.environ.get("STREAMER_ALLOW_UNAUTHENTICATED") == "1":
+        return True
+    if request.method in ("GET", "HEAD") and request.url.path.rstrip("/") in {p.rstrip("/") for p in _PUBLIC_GETS}:
+        return True
+    if request.method == "OPTIONS":
+        return True
+    key = os.environ.get("API_KEY", "")
+    given = request.headers.get("x-streamer-key") or request.headers.get("x-api-key") or ""
+    if key and given and hmac.compare_digest(given.encode(), key.encode()):
+        return True
+    host = (request.client.host if request.client else "") or ""
+    origin = request.headers.get("origin", "")
+    if origin:
+        try:
+            origin_host = (urlparse(origin).hostname or "").lower()
+        except ValueError:
+            return False
+        if origin_host not in _LOOPBACK:
+            return False
+    return host in _LOOPBACK
+
+
 def _make_app(
     *,
     idle_timeout: int,
     max_duration: int,
 ) -> FastAPI:
     app = FastAPI(title="Jarvis Live Avatar Streamer")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # Browsers reach the streamer through the Jarvis backend, never directly: no cross-origin access
+    # unless STREAMER_CORS_ORIGINS names some (comma-separated).
+    cors = [o.strip() for o in os.environ.get("STREAMER_CORS_ORIGINS", "").split(",") if o.strip()]
+    if cors:
+        app.add_middleware(CORSMiddleware, allow_origins=cors, allow_methods=["*"], allow_headers=["*"])
+
+    @app.middleware("http")
+    async def _only_its_backend(request: Request, call_next):
+        if not _streamer_request_allowed(request):
+            return JSONResponse({"error": "Unauthorized: the streamer takes requests from its Jarvis backend only"}, status_code=401)
+        return await call_next(request)
     slot = _SessionSlot()
     record_env_info(os.environ.get("RENDERER_URL"))
     register_debug_routes(app, _renderer_base_url)
@@ -470,6 +514,8 @@ def _make_app(
     @app.delete("/api/avatar/{avatar_id}/")
     async def delete_avatar_route(avatar_id: str):
         target_id = avatar_id.strip().lower()
+        if not _AVATAR_ID.fullmatch(target_id):
+            raise HTTPException(status_code=400, detail="Invalid avatar id")
         root_dir = Path(__file__).resolve().parent.parent.parent.parent
         ref_frame = root_dir / "artifacts" / "main" / "avatars_artifacts" / "reference_frames" / f"{target_id}.png"
         if ref_frame.is_file():

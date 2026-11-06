@@ -2,6 +2,7 @@
 // forwards it to a connected phone over its WebSocket ({ type: 'device_action' }),
 // the app executes it natively or through the "Jarvis Actions" Shortcut, and
 // answers with { type: 'device_action_result' }, which becomes the tool response.
+import crypto from 'node:crypto';
 
 /** Every action the phone may run. `settings` values are the Shortcut's branches. */
 export const PHONE_ACTIONS = {
@@ -16,7 +17,7 @@ export const PHONE_ACTIONS = {
   call: 'Call someone; iOS asks the user to confirm. target: contact name or phone number.',
   navigate: 'Start directions in Maps. target: destination.',
   open_app: 'Open an app. target: app name (e.g. Spotify, WhatsApp, Settings, Camera).',
-  open_url: 'Open a web page or app link. value: the URL.',
+  open_url: 'Open a web page (https), a maps or a mailto link. value: the URL.',
   settings: 'Change a phone setting. value: one of ' +
     'wifi_on, wifi_off, bluetooth_on, bluetooth_off, cellular_on, cellular_off, airplane_on, airplane_off, ' +
     'low_power_on, low_power_off, dark_mode, light_mode, focus_on, focus_off, ' +
@@ -192,7 +193,8 @@ export class PhoneBridge {
         ? `The connected phone cannot do "${action}".`
         : "No phone is connected to Jarvis right now, so I can't do that on the phone.";
     }
-    const id = `pa${Date.now().toString(36)}${(this.seq++).toString(36)}`;
+    // Unguessable: only the phone it went to can answer it (handleResult checks the sender too).
+    const id = `pa${crypto.randomBytes(12).toString('base64url')}`;
     const request = { type: 'device_action', id, action };
     for (const key of ['value', 'target', 'text']) {
       if (args[key] !== undefined && args[key] !== null && args[key] !== '') request[key] = String(args[key]);
@@ -203,7 +205,7 @@ export class PhoneBridge {
         this.pending.delete(id);
         resolve(`The phone did not answer in time; "${action}" may not have run.`);
       }, this.timeoutMs);
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, { resolve, timer, client });
       try {
         client.send(JSON.stringify(request));
       } catch (e) {
@@ -214,10 +216,10 @@ export class PhoneBridge {
     });
   }
 
-  /** { type: 'device_action_result', id, ok, result } from the phone. */
-  handleResult(msg = {}) {
+  /** { type: 'device_action_result', id, ok, result } from `from`, the phone the request went to. */
+  handleResult(msg = {}, from) {
     const entry = this.pending.get(msg.id);
-    if (!entry) return false;
+    if (!entry || (from !== undefined && entry.client !== from)) return false;
     clearTimeout(entry.timer);
     this.pending.delete(msg.id);
     const detail = String(msg.result || (msg.ok ? 'Done.' : 'It failed.'));

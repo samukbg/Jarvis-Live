@@ -241,3 +241,12 @@ test('links: routed by Content-Type (api, web, pdf, csv), SPA rendered, headers 
     other.server.close();
   }
 });
+
+test('IPv6 spellings of an IPv4 address are judged as that address', () => {
+  assert.equal(addressClass('::ffff:7f00:1'), 'private');
+  assert.equal(addressClass('::ffff:a9fe:a9fe'), 'blocked');
+  assert.equal(addressClass('64:ff9b::a9fe:a9fe'), 'blocked');
+  assert.equal(addressClass('2002:c0a8:101::1'), 'private');
+  assert.equal(addressClass('::ffff:808:808'), 'public');
+  assert.equal(addressClass('2606:4700::1111'), 'public');
+});

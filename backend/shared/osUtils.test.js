@@ -42,3 +42,11 @@ test('with it, the prompt is exactly one inert argument', () => {
   assert.equal(r.args[3], 'System instructions: be brief.  User: say ”hi” & del C:\\important | type secrets > out');
   assert.equal(r.args[5], 'model-x');
 });
+
+test('a % in user text cannot expand an environment variable, and only plain names pass as model names', async () => {
+  const { safeCliName } = await import('./osUtils.js');
+  assert.equal(shellArg('show %API_KEY% now', 'win32'), '"show ％API_KEY％ now"');
+  assert.equal(safeCliName('gemini-3.8-flash'), 'gemini-3.8-flash');
+  assert.equal(safeCliName('openrouter::nvidia/nemotron-3:free'), 'openrouter::nvidia/nemotron-3:free');
+  for (const bad of ['gemini&calc&', 'x|y', 'a b', '%TEMP%', 'x"y', '', 42]) assert.equal(safeCliName(bad), null, String(bad));
+});

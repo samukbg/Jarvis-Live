@@ -18,9 +18,34 @@ export const FETCH_LIMITS = { timeoutMs: 15_000, maxBytes: 2 * 1024 * 1024, maxR
 const USER_AGENT = 'Mozilla/5.0 (compatible; JarvisBusiness/1.0; +https://jarvis-live.xyz)';
 
 /** 'public' | 'private' (loopback, LAN, CGNAT, ULA) | 'blocked' (link-local, multicast, unspecified…). */
+/** The 8 16-bit groups of an IPv6 address (a dotted IPv4 tail included), or null. */
+function ipv6Groups(a) {
+  if (!net.isIPv6(a)) return null;
+  let s = a.replace(/%.*$/, '');
+  const v4 = s.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4) {
+    const [w, x, y, z] = v4[1].split('.').map(Number);
+    s = s.slice(0, -v4[1].length) + `${((w << 8) | x).toString(16)}:${((y << 8) | z).toString(16)}`;
+  }
+  const [head, tail] = s.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail !== undefined && tail ? tail.split(':') : [];
+  const groups = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t];
+  return groups.length === 8 ? groups.map((g) => parseInt(g, 16)) : null;
+}
+const v4Of = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+
 export function addressClass(ip) {
   let a = String(ip || '').toLowerCase();
-  if (a.startsWith('::ffff:') && net.isIPv4(a.slice(7))) a = a.slice(7);
+  // IPv6 forms that carry an IPv4 address (in any spelling, ::ffff:7f00:1 too): judged as that IPv4 address.
+  const g = ipv6Groups(a);
+  if (g) {
+    const zeros = (n) => g.slice(0, n).every((x) => x === 0);
+    if (zeros(5) && g[5] === 0xffff) a = v4Of(g[6], g[7]); // IPv4-mapped
+    else if (zeros(6) && (g[6] || g[7] > 1)) a = v4Of(g[6], g[7]); // IPv4-compatible (deprecated)
+    else if (g[0] === 0x64 && g[1] === 0xff9b && zeros(0) && g.slice(2, 6).every((x) => x === 0)) a = v4Of(g[6], g[7]); // NAT64
+    else if (g[0] === 0x2002) a = v4Of(g[1], g[2]); // 6to4
+  }
   if (net.isIPv4(a)) {
     const [p, q, r] = a.split('.').map(Number);
     // 192.0.0.0/24 (protocol assignments) and 192.0.2.0/24 (documentation) only: the rest of

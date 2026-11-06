@@ -58,8 +58,14 @@ export function escapeArg(arg) {
  */
 export function shellArg(arg, platform = process.platform) {
   if (platform !== 'win32' || typeof arg !== 'string') return arg;
-  return `"${arg.replace(/\r?\n/g, ' ').replace(/"/g, '\u201d')}"`;
+  // %NAME% expands even inside quotes (and cmd.exe has no escape for it on a command line):
+  // `%` becomes the full-width ％.
+  return `"${arg.replace(/\r?\n/g, ' ').replace(/"/g, '\u201d').replace(/%/g, '\uff05')}"`;
 }
+
+/** A model, provider or session name fit for a command line: letters, digits and . _ : / @ + - only. */
+export const SAFE_CLI_NAME = /^[A-Za-z0-9._:/@+-]{1,160}$/;
+export const safeCliName = (v) => (typeof v === 'string' && SAFE_CLI_NAME.test(v) ? v : null);
 
 /** Where agent CLIs run: JARVIS_AGENT_CWD, else the user's home folder. */
 export function agentWorkdir() {

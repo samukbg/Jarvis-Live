@@ -62,12 +62,13 @@ function fakeGoogle() {
 
 function setup({ google = fakeGoogle(), phoneAction = null, fetchImpl } = {}) {
   const sent = [];
+  const clock = { t: NOW };
   const svc = createCalendarService({
-    dataDir: tmp(), broadcast: (m) => sent.push(m), now: () => NOW, lookup, google, phoneAction, fetchImpl,
+    dataDir: tmp(), broadcast: (m) => sent.push(m), now: () => clock.t, lookup, google, phoneAction, fetchImpl,
     cloud: () => ({ url: 'https://cloud.test', authHeader: 'Machine m1.s1' }),
   });
   svc.setSettings({ timeZone: 'Europe/Lisbon' });
-  return { svc, sent, google };
+  return { svc, sent, google, clock };
 }
 
 /** Adds a Google account the way a finished sign-in does. */
@@ -153,7 +154,7 @@ test('phone calendars: synced by the app, read-only, toggles kept across syncs',
 });
 
 test('voice: agenda with refs + card, add (clash noted), move by ref, delete only when confirmed', async () => {
-  const { svc, sent } = setup();
+  const { svc, sent, clock } = setup();
   await addGoogle(svc);
   const agenda = await svc.runTool('calendar_agenda', { day: 'today' });
   assert.match(agenda, /Now: Thursday,? 22 October 2026/);
@@ -169,8 +170,10 @@ test('voice: agenda with refs + card, add (clash noted), move by ref, delete onl
   const moved = await svc.runTool('calendar_update_event', { event: 'e1', start: '2026-10-23T09:00' });
   assert.match(moved, /Changed "Dentist" \(was 2026-10-22 16:00–17:00\): now "Dentist" on 2026-10-23 09:00–10:00\./);
 
-  const ask = await svc.runTool('calendar_delete_event', { event: 'haircut' });
-  assert.match(ask, /Not deleted yet\. Ask the user to confirm deleting "Haircut"/);
+  // The model saying "confirmed" first, or right after asking, deletes nothing.
+  assert.match(await svc.runTool('calendar_delete_event', { event: 'haircut', confirmed: true }), /Not deleted yet\. Ask the user to confirm deleting "Haircut"/);
+  assert.match(await svc.runTool('calendar_delete_event', { event: 'haircut', confirmed: true }), /Not deleted yet/);
+  clock.t += 5_000; // the user answers
   const del = await svc.runTool('calendar_delete_event', { event: 'haircut', confirmed: true });
   assert.match(del, /Deleted "Haircut"/);
   assert.match(await svc.runTool('calendar_delete_event', { event: 'nothing like this' }), /No event matching/);
