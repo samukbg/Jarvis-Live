@@ -22,7 +22,8 @@ export const PHONE_ACTIONS = {
     'wifi_on, wifi_off, bluetooth_on, bluetooth_off, cellular_on, cellular_off, airplane_on, airplane_off, ' +
     'low_power_on, low_power_off, dark_mode, light_mode, focus_on, focus_off, ' +
     'volume_0, volume_25, volume_50, volume_75, volume_100.',
-  shortcut: "Run one of the user's own Shortcuts by name. target: shortcut name. text: optional input.",
+  shortcut: "Run one of the user's own Shortcuts by name; the phone asks the user to approve it first " +
+    '(Jarvis must be open on the phone). target: shortcut name. text: optional input.',
 };
 
 export const SETTINGS_VALUES = [
@@ -142,17 +143,21 @@ export const PHONE_ACTION_PROMPT =
   'music, flashlight, brightness, Wi-Fi/Bluetooth/Focus/volume and other settings, opening apps, directions, ' +
   "calls, messages, and the user's own Shortcuts). Use it whenever the user asks for something on their phone; " +
   'say a short acknowledgement first, then call the tool, then tell them the result. For messages and calls, ' +
-  'read back the recipient (and the message) before calling the tool — iOS then asks the user to confirm.';
+  'read back the recipient (and the message) before calling the tool — iOS then asks the user to confirm. ' +
+  'Shortcuts ask the user to approve them on the phone; if they decline, say so and do not retry unless they ask again.';
 
 const DEFAULT_TIMEOUT_MS = 25_000; // Shortcuts may need a moment to switch apps and back
+// `shortcut` first waits up to 60 s for the user's OK on the phone (phoneActions.ts), then runs.
+const CONFIRM_TIMEOUT_MS = 90_000;
 
 /**
  * Routes `phone_action` calls to a connected phone and waits for its answer.
  * A phone registers with { type: 'device_hello', platform, actions } on connect.
  */
 export class PhoneBridge {
-  constructor({ timeoutMs = DEFAULT_TIMEOUT_MS, log = () => {} } = {}) {
+  constructor({ timeoutMs = DEFAULT_TIMEOUT_MS, confirmTimeoutMs = CONFIRM_TIMEOUT_MS, log = () => {} } = {}) {
     this.timeoutMs = timeoutMs;
+    this.confirmTimeoutMs = confirmTimeoutMs;
     this.log = log;
     this.phones = new Map(); // client → { platform, actions:Set, at }
     this.pending = new Map(); // id → { resolve, timer }
@@ -204,7 +209,7 @@ export class PhoneBridge {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         resolve(`The phone did not answer in time; "${action}" may not have run.`);
-      }, this.timeoutMs);
+      }, action === 'shortcut' ? this.confirmTimeoutMs : this.timeoutMs);
       this.pending.set(id, { resolve, timer, client });
       try {
         client.send(JSON.stringify(request));
@@ -216,15 +221,17 @@ export class PhoneBridge {
     });
   }
 
-  /** { type: 'device_action_result', id, ok, result } from `from`, the phone the request went to. */
+  /** { type: 'device_action_result', id, ok, result, declined? } from `from`, the phone the request went to. */
   handleResult(msg = {}, from) {
     const entry = this.pending.get(msg.id);
     if (!entry || (from !== undefined && entry.client !== from)) return false;
     clearTimeout(entry.timer);
     this.pending.delete(msg.id);
     const detail = String(msg.result || (msg.ok ? 'Done.' : 'It failed.'));
-    this.log(`[PHONE] ← ${msg.ok ? 'ok' : 'failed'}: ${detail}`);
-    entry.resolve(msg.ok ? detail : `It didn't work on the phone: ${detail}`);
+    this.log(`[PHONE] ← ${msg.ok ? 'ok' : msg.declined ? 'declined' : 'failed'}: ${detail}`);
+    // Declined: the user said no on the phone, which is an answer, not an error to work around.
+    if (!msg.ok && msg.declined) entry.resolve(`The user declined on the phone, so nothing ran: ${detail} Do not retry unless they ask again.`);
+    else entry.resolve(msg.ok ? detail : `It didn't work on the phone: ${detail}`);
     return true;
   }
 }

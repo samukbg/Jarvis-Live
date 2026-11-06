@@ -546,7 +546,9 @@ class GeminiApiClient:
 
     async def _execute_phone_action(self, args: dict[str, Any]) -> str:
         bases, headers = self._backend_targets()
-        async with httpx.AsyncClient(timeout=40.0) as client:
+        # Shortcuts wait up to 60 s for the user's OK on the phone (backend allows 90 s); a
+        # shorter timeout would retry via the next base and ask the user a second time.
+        async with httpx.AsyncClient(timeout=100.0) as client:
             for base in bases:
                 try:
                     res = await client.post(f"{base}/api/device/action", json=args, headers=headers)

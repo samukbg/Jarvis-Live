@@ -110,3 +110,16 @@ test("only the phone a request went to can answer it, and its id can't be guesse
   assert.equal(bridge.handleResult({ id, ok: true, result: 'real' }, phone), true);
   assert.equal(await pending, 'real');
 });
+
+test('a shortcut waits for the user to approve it on the phone, and a decline is reported as one', async () => {
+  const bridge = new PhoneBridge({ timeoutMs: 20, confirmTimeoutMs: 200 });
+  const { phone, sent } = fakePhone(bridge, { reply: null });
+  const pending = bridge.run({ action: 'shortcut', target: 'Water plants', text: 'garden' });
+  await new Promise((r) => setTimeout(r, 40)); // past the normal timeout: still waiting
+  assert.equal(bridge.pending.size, 1);
+  bridge.handleResult({ id: sent[0].id, ok: false, declined: true, result: 'The user tapped Cancel on the phone; "Water plants" was not run.' }, phone);
+  const result = await pending;
+  assert.match(result, /^The user declined on the phone, so nothing ran: /);
+  assert.match(result, /Do not retry/);
+  assert.match(PHONE_ACTIONS.shortcut, /approve/);
+});
