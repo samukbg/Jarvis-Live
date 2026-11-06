@@ -49,3 +49,4 @@ business-sources.json
 # LFM3-Audio live voice: llama.cpp + the model, downloaded on first use (backend/voice/lfmRuntime.js)
 /lfm/
 /models/lfm/
+avatar-consents.json

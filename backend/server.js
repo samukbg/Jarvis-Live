@@ -357,10 +357,41 @@ async function rendererAvatars(host) {
   return list;
 }
 
+/**
+ * A portrait this server has in public/avatars (Helena) that its renderer doesn't have yet:
+ * copy it where the renderer finds new avatars.
+ */
+async function giveRendererPortrait(id) {
+  if (!/^[a-z0-9_]{1,40}$/.test(id)) return false;
+  const png = await fs.promises.readFile(path.resolve(__dirname, '../public/avatars', `${id}.png`)).catch(() => null);
+  if (!png) return false;
+  const dirs = [path.resolve(__dirname, '../live_avatar/artifacts/main/avatars_artifacts/reference_frames')];
+  for (const wsl of wslRoots()) {
+    if (fs.existsSync(wsl)) { dirs.push(path.join(wsl, 'root', 'avtr-1', 'artifacts', 'main', 'avatars_artifacts', 'reference_frames')); break; }
+  }
+  for (const dir of dirs) {
+    try {
+      await fs.promises.mkdir(dir, { recursive: true });
+      const file = path.join(dir, `${id}.png`);
+      if (!fs.existsSync(file)) await fs.promises.writeFile(file, png);
+    } catch {}
+  }
+  rendererAvatarsCache = { at: 0, list: null };
+  return true;
+}
+
 /** Point a session at an avatar this renderer has (see avatar/pickAvatar.js). */
 async function useAvailableAvatar(body, req) {
   const requested = body.avatar_id || body.engine?.avatar_id;
-  const avatar = pickAvatar(requested, await rendererAvatars(req.get('host')));
+  const want = String(requested || '').toLowerCase().trim();
+  let available = await rendererAvatars(req.get('host'));
+  // Not in the (30 s) cached list: ask again, and give the renderer a portrait this server has.
+  if (want && Array.isArray(available) && !available.includes(want)) {
+    rendererAvatarsCache = { at: 0, list: null };
+    if (await giveRendererPortrait(want)) await new Promise((r) => setTimeout(r, 1500));
+    available = await rendererAvatars(req.get('host'));
+  }
+  const avatar = pickAvatar(requested, available);
   if (requested && avatar !== String(requested).toLowerCase()) {
     broadcastLog(`[LIVE AVATAR] "${requested}" isn't on this server — using "${avatar}".`);
   }
@@ -468,6 +499,19 @@ app.post(['/api/avatar/upload', '/api/avatar/upload/', '/upload-avatar'], async 
       return res.status(409).json({
         error: `Avatar "${name}" is already currently training on the GPU.`
       });
+    }
+
+    // What the user confirmed before the photo was sent, and when (kept after a delete).
+    if (req.body.consent && typeof req.body.consent === 'object') {
+      const file = path.resolve(__dirname, '..', 'avatar-consents.json');
+      try {
+        const all = JSON.parse(await fs.promises.readFile(file, 'utf8').catch(() => '{}'));
+        const c = req.body.consent;
+        all[avatarId] = { ownFaceOrPermission: c.ownFaceOrPermission === true, notPublicFigure: c.notPublicFigure === true, at: new Date().toISOString() };
+        await fs.promises.writeFile(file, JSON.stringify(all, null, 2), { mode: 0o600 });
+      } catch (e) {
+        console.warn('[LiveAvatar] Could not record the avatar consent:', e.message);
+      }
     }
 
     // 2. Initialize Training Job

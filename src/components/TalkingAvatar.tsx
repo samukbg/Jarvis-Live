@@ -817,6 +817,11 @@ export const TalkingAvatar: React.FC<TalkingAvatarProps> = ({ onClick }) => {
           {/* Hidden Audio Element */}
           <audio ref={audioRef} autoPlay />
 
+          {/* Every avatar is labeled as AI (terms: custom avatars and cloned voices). */}
+          <span className="absolute top-2.5 right-2.5 z-20 pointer-events-none rounded-full border border-white/25 bg-black/60 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white/85" aria-label="AI-generated avatar">
+            AI avatar
+          </span>
+
           {/* Overlay when Connecting or Error */}
           {status !== 'live' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 bg-black/80 backdrop-blur-md">

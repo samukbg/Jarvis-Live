@@ -38,6 +38,10 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
   const [createdAvatarId, setCreatedAvatarId] = useState<string | null>(null);
   const [submitStep, setSubmitStep] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Confirmed before the photo is sent (the server records what and when).
+  const [consentOwn, setConsentOwn] = useState(false);
+  const [consentNotPublic, setConsentNotPublic] = useState(false);
+  const consented = consentOwn && consentNotPublic;
   const [existingAvatars, setExistingAvatars] = useState<string[]>([
     'maria', 'ben', 'kate', 'john', 'oliver', 'clara', 'ming',
     'elena', 'jack', 'may', 'arnold', 'camila', 'caroline', 'gordon', 'marcus', 'mozart', 'trevor'
@@ -70,6 +74,8 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
       setErrorMsg(null);
       setSubmitStep('');
       setCreatedAvatarId(null);
+      setConsentOwn(false);
+      setConsentNotPublic(false);
       handledReadyRef.current = null;
     }
   }, [isOpen]);
@@ -235,6 +241,10 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
       setErrorMsg('Please upload an avatar portrait photo following the guide');
       return;
     }
+    if (!consented) {
+      setErrorMsg('Confirm both statements under "Your photo and voice" first.');
+      return;
+    }
 
     setIsSubmitting(true);
     setErrorMsg(null);
@@ -253,6 +263,7 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
           audio: audioBase64 || undefined,
           gender,
           voice,
+          consent: { ownFaceOrPermission: consentOwn, notPublicFigure: consentNotPublic, at: new Date().toISOString() },
         })
       });
 
@@ -579,6 +590,23 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
           </div>
         </div>
 
+        {/* Consent: what happens to the photo and voice */}
+        <div className="mt-4 p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
+          <div className="text-xs font-bold text-white">Your photo and voice</div>
+          <p className="text-[11px] text-white/60 leading-relaxed">
+            They're saved on your JARVIS server and your avatar server, nowhere else. Delete the avatar any time and both are erased.
+          </p>
+          {[
+            { on: consentOwn, set: setConsentOwn, text: "This is my own face and voice, or I have this person's permission to use them." },
+            { on: consentNotPublic, set: setConsentNotPublic, text: 'This is not a public figure or a celebrity.' },
+          ].map((c) => (
+            <label key={c.text} className="flex items-start gap-2 text-xs text-white/85 cursor-pointer">
+              <input type="checkbox" checked={c.on} onChange={() => c.set(!c.on)} className="mt-0.5 accent-cyan-400" />
+              <span>{c.text}</span>
+            </label>
+          ))}
+        </div>
+
         {/* Async Processing / Training Progress Bar */}
         {isSubmitting && (
           <div className="mt-4 p-4 rounded-xl bg-black/60 border border-accent-cyan/40 backdrop-blur-md">
@@ -644,7 +672,7 @@ export const CreateAvatarModal: React.FC<CreateAvatarModalProps> = ({ isOpen, on
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !consented}
               className="flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold bg-accent-cyan hover:bg-accent-cyan/90 text-black shadow-lg shadow-accent-cyan/20 transition-all disabled:opacity-50"
             >
               {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
