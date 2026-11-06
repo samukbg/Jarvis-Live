@@ -168,14 +168,49 @@ test('reply_directly: a function output, then a spoken (text + audio) response',
   assert.equal(final.text, "I'm great, thanks!");
 });
 
-test('a plain text answer in a decision is stopped and spoken after a nudge', async () => {
+test('a plain text answer in a decision is stopped after a sentence and spoken with its words', async () => {
   const { p, ws } = await connected();
   p.sendUserText('Thanks!');
   ws.clear();
   ws.server({ type: 'response.output_item.added', item: { type: 'message' } });
+  ws.server({ type: 'response.output_text.delta', delta: "You're welcome! Feel free to reach out if you need" });
+  assert.equal(ws.sent.length, 0); // still reading
+  ws.server({ type: 'response.output_text.delta', delta: ' anything else. Have a great day!' });
   assert.equal(ws.sent[0].type, 'response.cancel');
   ws.server({ type: 'response.done', response: { status: 'cancelled', output: [{ type: 'message' }] } });
-  assert.equal(ws.last('conversation.item.create').item.role, 'user');
+  const nudge = ws.last('conversation.item.create').item;
+  assert.equal(nudge.role, 'user');
+  // Told only "say your answer", the 2B model said one of the rules' examples instead.
+  assert.match(nudge.content[0].text, /You're welcome! Feel free to reach out/);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+});
+
+test('a tool call written as text in a decision runs (seen live: \'delegar {"task": …}\')', async () => {
+  const { p, ws, out } = await connected({ canSearch: () => false });
+  p.responding = 'decide'; // an audio turn: no words to check before the decision
+  ws.server({ type: 'response.output_item.added', item: { type: 'message' } });
+  ws.server({ type: 'response.output_text.delta', delta: 'delegar {"heard": "Pesquisa o preço da gasolina em Portugal", "task": "Search the web for the price of gasoline in Portugal"}' });
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [{ type: 'message' }] } });
+  await tick();
+  assert.deepEqual(out.delegated, ['Search the web for the price of gasoline in Portugal']);
+  // No call id: the tool's output goes in as text, then the acknowledgement is spoken.
+  assert.match(ws.sent.find((e) => e.item?.type === 'message').item.content[0].text, /^\(Result of delegate_to_agy for "Pesquisa o preço da gasolina em Portugal"\) .*started/);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+});
+
+test('"I can\'t access the internet" in a decision: decided again once, reminded of the look-up tool', async () => {
+  const { p, ws } = await connected({ canSearch: () => false });
+  p.responding = 'decide';
+  ws.server({ type: 'response.output_item.added', item: { type: 'message' } });
+  ws.server({ type: 'response.output_text.delta', delta: "I'm sorry, I don't have access to real-time information like the weather or news." });
+  assert.ok(!ws.types().includes('response.cancel'));
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [{ type: 'message' }] } });
+  assert.match(ws.last('conversation.item.create').item.content[0].text, /call delegate_to_agy/);
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text']);
+  // The second time it is spoken (no loop).
+  ws.server({ type: 'response.output_item.added', item: { type: 'message' } });
+  ws.server({ type: 'response.output_text.delta', delta: "I'm sorry, I can't access the internet." });
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [{ type: 'message' }] } });
   assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
 });
 
@@ -438,7 +473,46 @@ test('intentOf: clear requests map to their tool, computer work and ambiguity do
   assert.equal(tool('Write a script that tracks bitcoin prices into a CSV'), 'delegate_to_agy');
   assert.equal(tool('Open Spotify and play jazz'), null);
   assert.equal(tool('Tell me a joke'), null);
-  assert.equal(tool("What's the latest news about Apple?"), null);
+  // Look-ups: search_web when this computer can search, else the agent (it has the internet).
+  assert.equal(tool("What's the latest news about Apple?"), 'search_web');
+  assert.equal(tool("What's the latest news about Apple?", { search: false }), 'delegate_to_agy');
+  assert.equal(intentOf('Who won the game last night?', 'claude', { search: false }).tool, 'delegate_to_claude');
+  assert.equal(intentOf('Who won the game last night?').direct, true);
+  // The agent the user names gets it, whatever it is.
+  assert.equal(tool('Ask AGY what the weather is in Paris'), 'delegate_to_agy');
+  assert.equal(tool('Pede ao agente para ver o preço da gasolina'), 'delegate_to_agy');
+  // Portuguese weather and prices.
+  assert.equal(tool('Qual é a previsão do tempo para amanhã em São Paulo?'), 'show_card');
+  assert.equal(tool('Vai chover hoje em Lisboa?'), 'show_card');
+  assert.equal(tool('Quanto está o bitcoin hoje?'), 'show_card');
+});
+
+test('lookupIntent: current information from the web, in English and Portuguese; not small talk', async () => {
+  const { lookupIntent } = await import('./LFMRealtimeProvider.js');
+  for (const w of [
+    "What's the latest news today?", 'Search for the best Italian restaurants in Lisbon.', 'Who won the Champions League game last night?',
+    'Look up the opening hours of the Louvre.', "What's the price of gold today?", 'What happened in the world today?',
+    'Who is the current president of Brazil?', 'Is the pharmacy near me open now?', 'Find out who won the game',
+    'Quais são as últimas notícias de hoje?', 'Pesquisa o preço da gasolina em Portugal.', 'Quem ganhou o jogo ontem?',
+    'Qual o horário do Pingo Doce?', 'Restaurantes perto de mim',
+  ]) assert.equal(lookupIntent(w), true, w);
+  for (const w of [
+    'Hi Jarvis, how are you doing?', 'How are you today?', 'What are you doing today?', 'Tell me a joke.', "Thanks, that's all for now.",
+    "What's the capital of Australia?", 'What can you do?', 'Good morning!', 'Olá Jarvis, tudo bem contigo?', 'Bom dia, como estás?',
+    'O que você fez hoje?', 'What should I cook tonight?', 'Show me something funny', '',
+  ]) assert.equal(lookupIntent(w), false, w);
+});
+
+test('callFromText: a written tool call becomes a call Jarvis runs; prose is not one', async () => {
+  const { callFromText } = await import('./LFMRealtimeProvider.js');
+  const c = callFromText('search_web {"heard": "latest news", "query": "latest ne', 'agy', { search: false });
+  assert.equal(c.name, 'delegate_to_agy'); // no search here: the agent looks it up
+  assert.equal(c.call_id, null);
+  assert.match(JSON.parse(c.arguments).task, /^Look this up on the web.*latest news$/);
+  assert.equal(callFromText('reply_directly {"heard": "Hi Jarvis"}').name, 'reply_directly');
+  assert.equal(callFromText('show_card {"heard": "weather in Rome", "kind": "weather", "place": "Rome"}').name, 'show_card');
+  assert.equal(callFromText("You're welcome! Have a great day."), null);
+  assert.equal(callFromText('{"heard": "hello"}'), null); // nothing to run
 });
 
 test('rerouteFor: any tool (reply_directly too) is overruled by clear words, a right pick is not', async () => {
@@ -470,6 +544,9 @@ test('repairArgs mends the 2B model\'s arguments from the user\'s words', async 
   assert.equal(repairArgs('show_card', { heard: 'One euro in dollars?', kind: 'finance' }).symbol, 'EURUSD=X');
   const card = repairArgs('show_card', { heard: 'Will it rain tomorrow in New York?', kind: 'weather', summary: 'Provide the weather in New York' });
   assert.deepEqual(card, { kind: 'weather', summary: '', place: 'New York', day: 'tomorrow' });
+  // "for Paris", and Portuguese ("amanhã em São Paulo"): without a place the card has no data.
+  assert.deepEqual(repairArgs('show_card', { heard: "What's the weather for Paris for tomorrow?", kind: 'weather' }), { kind: 'weather', place: 'Paris', day: 'tomorrow' });
+  assert.deepEqual(repairArgs('show_card', { heard: 'Qual é a previsão do tempo para amanhã em São Paulo?', kind: 'weather' }), { kind: 'weather', place: 'São Paulo', day: 'tomorrow' });
 });
 
 test('a reroute works for every tool, and the turn\'s first words fill the second pick\'s arguments', async () => {
@@ -502,4 +579,112 @@ test('a calendar delete waits for the user to confirm, even when the model says 
   decision(ws, [call('calendar_delete_event', { heard: 'Yes', event: 'team lunch', confirmed: true }, 'c2')]);
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(runs[1].confirmed, true);
+});
+
+test('no web search key: no search_web tool, look-ups go to the agent, and the rules say it has the internet', async () => {
+  const { lfmTools, lfmInstructions } = await import('./LFMRealtimeProvider.js');
+  assert.ok(lfmTools('agy', {}).some((t) => t.name === 'search_web'));
+  assert.ok(!lfmTools('agy', { search: false }).some((t) => t.name === 'search_web'));
+  const rules = lfmInstructions('agy', [], { search: false });
+  assert.match(rules, /Anything to look up on the internet: .*→ delegate_to_agy/);
+  assert.match(rules, /never say you can't access the internet/);
+  assert.doesNotMatch(rules, /search_web/);
+  const r = provider({ canSearch: () => false });
+  await r.p.connect('agy');
+  FakeSocket.last.open();
+  const tools = FakeSocket.last.sent[0].session.tools.map((t) => t.name);
+  assert.ok(!tools.includes('search_web') && tools.includes('delegate_to_agy'));
+  assert.match(FakeSocket.last.sent[0].session.instructions, /never say you can't access the internet/);
+});
+
+test('a look-up the model answers itself (reply_directly) is delegated at once with the user\'s words', async () => {
+  const { p, ws, out } = await connected({ canSearch: () => false });
+  p.redirected = false;
+  p.responding = 'decide';
+  decision(ws, [call('reply_directly', { heard: "What's the latest news today?" })]);
+  await tick();
+  assert.deepEqual(out.delegated, ["Look this up on the web and answer in two or three short sentences: What's the latest news today?"]);
+  const fo = JSON.parse(ws.sent.find((e) => e.item?.type === 'function_call_output').item.output);
+  assert.equal(fo.status, 'started');
+  assert.match(fo.note, /Let me check that/);
+  // No second decision: the acknowledgement is spoken, then the answer.
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } });
+  await tick(); await tick();
+  assert.match(ws.sent.filter((e) => e.type === 'conversation.item.create').at(-1).item.content[0].text, /^\(Agent result\) The task "What's the latest news today\?" is finished/);
+});
+
+test('search_web that fails (or no key) hands the question to the agent instead of "the search is unavailable"', async () => {
+  const { p, ws, out } = await connected({ search: async () => { throw new Error('No web search available (no Gemini or OpenAI API key).'); } });
+  p.redirected = false;
+  p.responding = 'decide';
+  decision(ws, [call('search_web', { heard: 'Look up the opening hours of the Louvre', query: 'Louvre opening hours' })]);
+  await tick(); await tick();
+  assert.deepEqual(out.delegated, ['Look this up on the web and answer in two or three short sentences: Look up the opening hours of the Louvre']);
+  assert.ok(out.logs.some((l) => /Web search failed/.test(l)));
+  assert.equal(JSON.parse(ws.sent.find((e) => e.item?.type === 'function_call_output').item.output).status, 'started');
+});
+
+test('a card without real data (a place or ticker not found) hands the question to the agent', async () => {
+  const { p, ws, out } = await connected({ showCard: async () => ({ shown: false, result: "That card couldn't be filled with real data." }) });
+  p.redirected = false;
+  p.responding = 'decide';
+  decision(ws, [call('show_card', { heard: "What's the price of gold today?", kind: 'finance' })]);
+  await tick(); await tick();
+  assert.deepEqual(out.delegated, ["Look this up on the web and answer in two or three short sentences: What's the price of gold today?"]);
+});
+
+test('typed look-ups skip the decision: searched (key) or delegated (no key) right away', async () => {
+  const { p, ws, out } = await connected({ canSearch: () => false });
+  p.sendUserText('Quais são as últimas notícias de hoje?');
+  await tick();
+  assert.deepEqual(out.delegated, ['Look this up on the web and answer in two or three short sentences: Quais são as últimas notícias de hoje?']);
+  assert.ok(!ws.sent.some((e) => e.type === 'response.create' && e.response.output_modalities.length === 1)); // no text decision
+  assert.ok(ws.sent.some((e) => /^\(Result of delegate_to_agy for "Quais são as últimas notícias de hoje\?"\) \{"status":"started"/.test(e.item?.content?.[0]?.text || '')));
+  assert.deepEqual(ws.last('response.create').response.output_modalities, ['text', 'audio']);
+
+  const searched = [];
+  const k = await connected({ search: async (q) => { searched.push(q); return 'Real Madrid won 2-1.'; } });
+  k.p.sendUserText('Who won the Champions League game last night?');
+  await tick(); await tick();
+  assert.deepEqual(searched, ['Who won the Champions League game last night?']);
+  assert.deepEqual(k.out.delegated, []);
+  // Small talk still goes to the model.
+  k.ws.server({ type: 'response.done', response: { status: 'completed', output: [] } }); // the spoken answer
+  k.ws.clear();
+  k.p.sendUserText('Hi Jarvis, how are you today?');
+  assert.deepEqual(k.ws.last('response.create').response.output_modalities, ['text']);
+});
+
+test('an agent the user names gets the request, even when the model picked a card', async () => {
+  const { p, ws, out } = await connected();
+  p.redirected = false;
+  p.responding = 'decide';
+  decision(ws, [call('show_card', { heard: 'Ask AGY to check the weather in Paris and put it in a note', kind: 'weather', place: 'Paris' })]);
+  await tick();
+  assert.deepEqual(out.delegated, ['Ask AGY to check the weather in Paris and put it in a note']);
+});
+
+test('a tool call written into the spoken answer is not said out loud: it runs once', async () => {
+  const { p, ws, out } = await connected({ canSearch: () => false });
+  p.sendUserText('Thanks');
+  decision(ws, [call('reply_directly', { heard: 'Thanks' })]);
+  await tick();
+  ws.clear();
+  out.audio.length = 0;
+  ws.server({ type: 'response.output_text.delta', delta: 'delegate_to_agy {"task": "Look up the Apple Store' });
+  ws.server({ type: 'response.output_audio.delta', delta: Buffer.from('xx').toString('base64'), item_id: 'i1' });
+  ws.server({ type: 'response.output_text.delta', delta: '\'s opening hours in Lisbon"}' });
+  assert.deepEqual(out.audio, []); // not heard
+  assert.ok(out.messages.some((m) => m.type === 'gemini_live_interrupt'));
+  assert.ok(!out.messages.some((m) => m.type === 'voice_transcript' && /delegate_to/.test(m.text)));
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } });
+  await tick();
+  assert.deepEqual(out.delegated, ["Look up the Apple Store's opening hours in Lisbon"]);
+  // Written again in the next answer: dropped, not run twice.
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } }); // the ack
+  ws.server({ type: 'response.output_text.delta', delta: 'delegate_to_agy {"task": "Look up something else"}' });
+  ws.server({ type: 'response.done', response: { status: 'completed', output: [] } });
+  await tick();
+  assert.equal(out.delegated.length, 1);
 });

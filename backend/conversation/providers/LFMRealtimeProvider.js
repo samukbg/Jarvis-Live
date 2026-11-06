@@ -17,7 +17,7 @@ import { PHONE_ACTION_TOOL } from '../../device/phoneActions.js';
 import { BUSINESS_TOOL } from '../../business/card.js';
 import { SHOW_CARD_TOOL, showCard } from '../../cards/showCard.js';
 import { TranscriptBuffer } from '../transcript.js';
-import { webSearch } from '../webSearch.js';
+import { webSearch, webSearchAvailable } from '../webSearch.js';
 import { realtimeTools } from './OpenAIRealtimeProvider.js';
 
 export const DEFAULT_LFM_MODEL = 'LFM3-Audio-2B-Q4_K_M.gguf';
@@ -47,15 +47,24 @@ const ECHO_LOUDER = 3;
 const ECHO_MIN_SPEECH_MS = 350;
 // The same task asked again this soon is not run again (an echo, or the model retrying a failure).
 const REPEAT_TASK_MS = 90_000;
+// A plain answer in a decision is read this far before it is stopped: enough to see a tool call
+// written as text ('delegate {"task": …}') or "I can't access the internet".
+const PLAIN_PEEK_CHARS = 80;
+// A tool call written as text at the start of an answer: 'delegate_to_agy {', 'show_card({'.
+const WRITTEN_CALL = /^\s*(reply_directly|search_web|delegate_to_\w+|phone_action|show_card|show_business_dashboard|calendar_\w+)\W{0,3}\{/;
+// What the model says when it forgets it has the agent and the web.
+const NO_INTERNET = /\b(don'?t|do not|can'?t|cannot|unable to|not able to)\b.{0,24}\b(access|browse|search|internet|real[- ]time|live (data|information)|current (data|information))|\bno (access|internet|web)|n[aã]o (tenho|consigo|posso)\b.{0,24}\b(acesso|aceder|acessar|internet|pesquisar)/i;
 
 /**
  * The 2B model's instructions: short numbered rules and worked examples, which it follows far
  * better than the other voices' prose (measured with a routing eval over every tool: the shared
  * Live prompt routed 28/49 requests right). `calendar`: whether the calendar tools are declared;
- * `today`: "Friday 6 November 2026" for relative days.
+ * `today`: "Friday 6 November 2026" for relative days. `search`: whether search_web is declared
+ * (it needs a Gemini or OpenAI key): without it, the agent looks things up on the web.
  */
-export function lfmRules(agent, { calendar = false, today = null } = {}) {
+export function lfmRules(agent, { calendar = false, today = null, search = true } = {}) {
   const delegate = `delegate_to_${agent}`;
+  const lookup = search ? 'search_web' : delegate;
   const cal = calendar
     ? `3. The user's calendar, meetings, appointments, events: what's on, when is something, am I free → calendar_agenda; add, schedule or book → calendar_add_event; move, reschedule, rename → calendar_update_event; cancel, delete, remove → calendar_delete_event. The tools find the event from words of its title: never ask the user for an id or details.\n`
     : `3. Adding a calendar event → phone_action with action "calendar_event".\n`;
@@ -63,10 +72,11 @@ export function lfmRules(agent, { calendar = false, today = null } = {}) {
 1. Things on the user's phone: timers, alarms, reminders, phone calls, text messages, music (play, pause, next or previous song), directions, opening an app on the phone, flashlight, brightness, Wi-Fi, Bluetooth, volume, do not disturb, dark mode, their Shortcuts → phone_action.
 2. Live cards: the weather, rain or temperature → show_card kind "weather"; the price of a stock, a crypto or a currency → show_card kind "finance" with its ticker symbol; this computer's CPU, memory, disk or battery → show_card kind "system"; a flight → show_card kind "flight"; a match score → show_card kind "sports". Never search or delegate these.
 ${cal}4. Their business, company, apps or projects, how they are doing → show_business_dashboard.
-5. News, events, opening hours, results, recent facts, places → search_web.
-6. Work on the user's computer: its apps, files, folders, downloads, documents, email, code, scripts, websites to browse, research to write up → ${delegate}, with the user's request written as an instruction.
-7. Everything else: greetings, thanks, small talk, jokes, what you can do, opinions, general knowledge → reply_directly.
+5. Anything to look up on the internet: news, events, opening hours, sports results, prices of things, recent or current facts, places, restaurants, "search for…", "look up…" → ${lookup}${search ? '' : ', with the question written as an instruction (the agent has the internet)'}.
+6. Work on the user's computer: its apps, files, folders, downloads, documents, email, code, scripts, websites to browse, research to write up, or anything the user asks an agent to do → ${delegate}, with the user's request written as an instruction.
+7. Everything else: greetings, thanks, small talk, jokes, what you can do, opinions, general knowledge that doesn't change (science, history, capitals, definitions) → reply_directly.
 Always fill "heard" with the user's exact words. Never answer with plain text instead of a tool, and never ask the user for details a tool can work out ("call my mom" → phone_action call with target "mom").
+You do reach the internet through these tools: never say you can't access the internet, the web or real-time information.
 
 Examples (user → tool and arguments):
 "Set a timer for ten minutes" → phone_action {"action":"timer","value":"600"}
@@ -87,10 +97,13 @@ ${calendar ? `"What do I have on Monday?" → calendar_agenda {"day":"monday"}
 "Push my call with Sara to 4 pm" → calendar_update_event {"event":"Sara","start":"<its date>T16:00"}
 "Delete the team lunch" → calendar_delete_event {"event":"team lunch"}
 ` : ''}"How are my apps doing?" → show_business_dashboard {}
-"What's the latest on the elections?" → search_web {"query":"latest election news"}
+${search ? `"What's the latest on the elections?" → search_web {"query":"latest election news"}
+"Look up the opening hours of the Louvre" → search_web {"query":"Louvre opening hours"}` : `"What's the latest on the elections?" → ${delegate} {"task":"Search the web for the latest election news and sum it up in two sentences"}
+"Look up the opening hours of the Louvre" → ${delegate} {"task":"Look up the Louvre's opening hours on the web"}`}
 "Open my Downloads folder and find the invoice from Amazon" → ${delegate} {"task":"Open the Downloads folder and find the invoice from Amazon"}
 "Check my inbox for anything urgent" → ${delegate} {"task":"Check my email inbox for urgent messages"}
 "Tell me a fun fact" → reply_directly {}
+"What's the capital of Japan?" → reply_directly {}
 ${today ? `\nToday is ${today}.\n` : ''}
 After a tool, speak to the user in one or two short sentences, in English. When an agent fails, say what happened; never delegate the same task again unless the user asks again.
 
@@ -101,11 +114,11 @@ After a tool, speak to the user in one or two short sentences, in English. When 
  * The session's instructions: the rules, then the shared voice prompt (for the spoken answers:
  * cards, phone actions, agent results), then the turns before a drop.
  */
-export function lfmInstructions(agent, history = [], { calendar = null, now = Date.now() } = {}) {
+export function lfmInstructions(agent, history = [], { calendar = null, now = Date.now(), search = true } = {}) {
   const today = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(now));
   // Not the shared Live prompt: it sends weather and prices to a web search, and the 2B model
   // followed it over the rules.
-  let text = `${lfmRules(agent, { calendar: !!calendar, today })}The agent's answers come back later as a message starting with "(Agent result)": tell the user what it says, briefly and naturally. For messages and calls, say who it is for; the phone asks the user to confirm.${calendar ? `\n\n${calendar}` : ''}`;
+  let text = `${lfmRules(agent, { calendar: !!calendar, today, search })}The agent's answers come back later as a message starting with "(Agent result)": tell the user what it says, briefly and naturally. For messages and calls, say who it is for; the phone asks the user to confirm.${calendar ? `\n\n${calendar}` : ''}`;
   if (history.length) {
     text += `\n\nThe conversation so far (the connection dropped; carry on from here without mentioning it):\n${history.map((h) => `${h.role === 'user' ? 'User' : 'Jarvis'}: ${h.text}`).join('\n')}`;
   }
@@ -125,19 +138,47 @@ export const REPLY_TOOL = {
 
 /** Every LFM tool asks first for the user's words: the guard below checks the choice against them. */
 const HEARD = { type: 'string', description: "The user's exact words." };
-export const lfmTools = (agent, opts) => [REPLY_TOOL, ...realtimeTools(agent, opts)].map((t) => ({
+export const lfmTools = (agent, { search = true, ...opts } = {}) => [REPLY_TOOL, ...realtimeTools(agent, opts)].filter((t) => search || t.name !== 'search_web').map((t) => ({
   ...t,
   parameters: { ...t.parameters, properties: { heard: HEARD, ...t.parameters.properties }, required: ['heard', ...(t.parameters.required || [])] },
 }));
+
+// Words that ask for something only the internet knows today, in English and Portuguese (accents
+// dropped, see plain()). Alone enough: news, a search, scores, opening hours, a price.
+const LOOKUP = /\b(news|headlines?|search (for|the web|online|google)|look (it |this |that )?up|google (it|for)|find out|opening hours|open (today|now|until|on sundays?)|what time does .+ (open|close)|scores?|standings|who won|who is winning|results? of|traffic|prices?|pricing|costs?|cheapest|restaurants?|hotels?|bars? (in|near)|near me|concerts?|events? (in|this|today|tonight)|movies? (playing|showing|on)|stock market|noticias?|manchetes?|pesquis[ae]r?|procur[ae] (na internet|no google|online)|busca (na internet|no google)|horario (de funcionamento|d[oa])|que horas (abre|fecha)|placar|resultados? d[oa]s?|quem (ganhou|venceu|esta ganhando)|transito|precos?|quanto (custa|custam|esta o|esta a)|cotacao|restaurantes?|hoteis|perto de mim|concertos?|eventos?)\b/;
+// Time words that make a question about now, when it is a question about the world (not "you").
+const NOW = /\b(latest|recent(ly)?|current(ly)?|right now|today'?s?|tonight|this (week|weekend|morning|evening)|yesterday|last night|so far|hoje|agora|ontem|esta (semana|noite)|neste momento|ultim[ao]s?|atual(mente)?)\b/;
+const QUESTION = /\b(what|what's|who|who's|which|when|where|is there|are there|did|qual|quais|quem|quando|onde|o que|como (esta|foi))\b/;
+const ABOUT_US = /\b(you|your|yourself|i|i'm|me|my|myself|voce|tu|te|contigo|eu|meu|minha)\b/;
+// The user names an agent: their request goes to it as said.
+const AGENT_NAMED = /\b(ask|tell|have|get|use|delegate( it)? to|pe[cd]a (a|ao)|pede (a|ao)|diz (a|ao)|usa|delega( isso)? (a|ao|para)) (the |o )?(agy|antigravity|agent|claude|hermes|codex|gemini|agente)\b|\b(agy|antigravity|hermes)\b/;
+/** Lower case, without accents ("notícias" → "noticias"), spaced at both ends for \b. */
+const plain = (words) => ` ${String(words || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/’/g, "'")} `;
+
+/**
+ * The words ask for current information from the internet (news, a search, a price, a score,
+ * opening hours, "what happened today"…), in English or Portuguese. Small talk ("how are you
+ * today?") and things the model knows ("the capital of Japan") are not.
+ */
+export function lookupIntent(words) {
+  const t = plain(words);
+  if (!t.trim()) return false;
+  if (LOOKUP.test(t)) return !/\b(what|how) (do|can|could|would) you\b|\bwhat can you do\b/.test(t) || /\bnews\b/.test(t);
+  return NOW.test(t) && QUESTION.test(t) && !ABOUT_US.test(t);
+}
 
 /**
  * What the user clearly asked for, from their words: { tool, hint } when the words leave no
  * doubt (a timer is a phone action, Bitcoin's price is a card…), else null. Conservative on
  * purpose: it only overrules the model where the 2B model was measured to go wrong.
+ * `direct: true`: Jarvis runs it with the user's words, without asking the model again (an agent
+ * the user named; a look-up — search_web, or the agent when `search` is off: no key for it).
  */
-export function intentOf(words, agent = 'agy', { calendar = true } = {}) {
-  const t = ` ${String(words || '').toLowerCase()} `;
+export function intentOf(words, agent = 'agy', { calendar = true, search = true } = {}) {
+  const t = plain(words);
   if (!t.trim()) return null;
+  const delegate = `delegate_to_${agent}`;
+  if (AGENT_NAMED.test(t)) return { tool: delegate, hint: `${delegate}: the user asked an agent`, direct: true };
   const computer = /\b(on|in|from) (my|the) (computer|mac|laptop|pc|desktop)\b|\b(file|files|folder|folders|downloads?|documents?|pdf|script|code|repo|project|vs ?code|terminal|inbox|e-?mails?|spreadsheet|excel|word document|python|javascript|website|program)\b/;
   const phone = { tool: PHONE_ACTION_TOOL.name };
   if (/\b(timer|alarm|wake me( up)?|remind me|reminder|flashlight|torch|brightness|do not disturb|airplane mode|low power|dark mode|light mode|wi-?fi|bluetooth|volume)\b/.test(t) && !computer.test(t)) return { ...phone, hint: 'a phone action (timer, alarm, reminder or phone setting)' };
@@ -147,9 +188,9 @@ export function intentOf(words, agent = 'agy', { calendar = true } = {}) {
   if (/\b(pause|resume|skip|next|previous)\b.*\b(music|song|track)\b|\b(pause|stop) the music\b|\bnext song\b/.test(t) && !/\bspotify\b/.test(t)) return { ...phone, hint: 'phone_action with action "music"' };
   if (/\b(directions|navigate|take me) to\b/.test(t)) return { ...phone, hint: 'phone_action with action "navigate"' };
   if (/\b(on|in) my (phone|iphone)\b/.test(t)) return { ...phone, hint: 'phone_action: it is on the phone' };
-  if (/\b(weather|forecast|rain|raining|snow|snowing|sunny|cloudy|windy|umbrella|jacket|coat|temperature|degrees|how (hot|cold|warm))\b/.test(t) && !computer.test(t) && !/\b(cpu|gpu|computer|mac)\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "weather"' };
-  const asset = /\b(bitcoin|btc|ethereum|ether|eth|crypto|solana|dogecoin|xrp|cardano|stocks?|shares?|nasdaq|s&p|dow jones|exchange rate|euro|dollar|pound|yen|apple|tesla|nvidia|microsoft|amazon|google|meta)\b/;
-  if (asset.test(t) && /\b(price|cost|worth|value|how much|trading|quote|rate|doing today|up|down)\b/.test(t) && !computer.test(t) && !/\b(script|track|chart|csv|history|news)\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "finance" and the ticker symbol' };
+  if (/\b(weather|forecast|rain|raining|snow|snowing|sunny|cloudy|windy|umbrella|jacket|coat|temperature|degrees|how (hot|cold|warm)|previsao do tempo|o tempo (em|no|na|para|amanha|hoje)|chuva|chover|temperatura|clima|guarda-chuva|ensolarado|nublado|vai fazer (frio|calor|sol))\b/.test(t) && !computer.test(t) && !/\b(cpu|gpu|computer|mac)\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "weather"' };
+  const asset = /\b(bitcoin|btc|ethereum|ether|eth|crypto|solana|dogecoin|xrp|cardano|stocks?|shares?|nasdaq|s&p|dow jones|exchange rate|euro|dollar|dolar|pound|libra|yen|apple|tesla|nvidia|microsoft|amazon|google|meta|acoes)\b/;
+  if (asset.test(t) && /\b(price|cost|worth|value|how much|trading|quote|rate|doing today|(?<!look (it |this |that )?)up|down|quanto|cotacao|preco|vale|valor)\b/.test(t) && !computer.test(t) && !/\b(script|track|chart|csv|history|news)\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "finance" and the ticker symbol' };
   if (/\b(cpu|processor|ram|memory|disk|storage|battery)\b/.test(t) && /\b(my|this|the) (computer|mac|laptop|pc)\b|\bmy computer'?s\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "system"' };
   if (/\bflight\b/.test(t) && /\b[a-z]{2} ?\d{2,4}\b/.test(t)) return { tool: SHOW_CARD_TOOL.name, hint: 'show_card with kind "flight"' };
   if (calendar && /\b(calendar|agenda|schedule|meeting|meetings|appointment|appointments|event|events)\b/.test(t) && !computer.test(t)) {
@@ -159,7 +200,8 @@ export function intentOf(words, agent = 'agy', { calendar = true } = {}) {
     return { tool: 'calendar_agenda', hint: 'calendar_agenda' };
   }
   if (/\b(my|our) (business|businesses|company|startup|projects|apps)\b/.test(t) && !computer.test(t)) return { tool: BUSINESS_TOOL.name, hint: 'show_business_dashboard' };
-  if (computer.test(t) && /\b(open|find|create|make|write|check|move|copy|delete|rename|search|organi[sz]e|clean|run|build|fix|look)\b/.test(t)) return { tool: `delegate_to_${agent}`, hint: `${`delegate_to_${agent}`}: it is work on the user's computer` };
+  if (computer.test(t) && /\b(open|find|create|make|write|check|move|copy|delete|rename|search|organi[sz]e|clean|run|build|fix|look)\b/.test(t)) return { tool: delegate, hint: `${delegate}: it is work on the user's computer` };
+  if (lookupIntent(words) && !computer.test(t)) return { tool: search ? 'search_web' : delegate, hint: 'a look-up on the internet', direct: true, lookup: true };
   return null;
 }
 
@@ -168,10 +210,13 @@ export function intentOf(words, agent = 'agy', { calendar = true } = {}) {
  * for another tool, that tool and why — the model decides again with it named — else null.
  * reply_directly is overruled too: the 2B model "answers" prices and timers itself.
  */
-export function rerouteFor(name, args, agent = 'agy', { calendar = true } = {}) {
+export function rerouteFor(name, args, agent = 'agy', { calendar = true, search = true } = {}) {
   const words = args?.heard || (name === `delegate_to_${agent}` ? args?.task : name === 'search_web' ? args?.query : '');
-  const want = intentOf(words, agent, { calendar });
+  const want = intentOf(words, agent, { calendar, search });
   if (!want || want.tool === name) return null;
+  // A look-up only overrules talking, searching and delegating: a card, a phone action or the
+  // calendar the model picked fits too (and a card that finds no data hands over to the agent).
+  if (want.lookup && ![REPLY_TOOL.name, 'search_web', `delegate_to_${agent}`].includes(name)) return null;
   // A search for news about a company is not its share price; a delegation that mentions a
   // timer inside a script is not a timer (intentOf already excludes computer words).
   return want;
@@ -237,9 +282,10 @@ export function repairArgs(name, args = {}, { now = Date.now() } = {}) {
     if (/^(provide|get|show|check|find|display|fetch|look)\b|\?$/i.test(String(out.summary || '').trim())) out.summary = '';
     if (out.kind === 'finance' && heard && !out.symbol) Object.assign(out, assetFromWords(heard) || {});
     if (out.kind === 'weather' && heard) {
-      if (empty(out.place)) out.place = tail(/\bin ([A-Z][\w'’.-]*(?: [A-Z][\w'’.-]*)*)/);
-      if (/\bday after tomorrow\b/.test(t)) out.day = 'day after tomorrow';
-      else if (/\btomorrow\b/.test(t)) out.day = 'tomorrow';
+      // "in Rome", "for Paris", "em São Paulo": the capitalised words after the preposition.
+      if (empty(out.place)) out.place = tail(/(?:^|\s)(?:in|for|at|em|para|no|na|de) (\p{Lu}[\p{L}'’.-]*(?: (?:de |do |da )?\p{Lu}[\p{L}'’.-]*)*)/u);
+      if (/\bday after tomorrow\b|depois de amanh[aã]/.test(t)) out.day = 'day after tomorrow';
+      else if (/\btomorrow\b|amanh[aã]/.test(t)) out.day = 'tomorrow';
     }
   }
   if (/^calendar_(add|update)_event$/.test(name) && heard && typeof out.start === 'string') {
@@ -264,6 +310,36 @@ export function sameTask(a, b) {
   let common = 0;
   for (const w of x) if (y.has(w)) common += 1;
   return common / Math.min(x.size, y.size) >= 0.6;
+}
+
+/** The agent's task for a question only the web can answer, from the user's words. */
+export function lookupTask(words) {
+  return `Look this up on the web and answer in two or three short sentences: ${String(words || '').trim()}`;
+}
+
+/**
+ * A tool call the 2B model wrote as text instead of calling it ('delegar {"heard": "…", "task":
+ * "…"}', seen live), as a call Jarvis runs itself (call_id null), else null. The tool comes from
+ * its name when it's one of ours, else from the words (a look-up, an agent named, or a "task").
+ */
+export function callFromText(text, agent = 'agy', { calendar = true, search = true } = {}) {
+  const t = String(text || '');
+  if (!/\{[\s\S]*"(heard|task|query)"\s*:/.test(t)) return null;
+  const m = /([a-z_]+)\W{0,3}\{([\s\S]*)$/i.exec(t);
+  let args = {};
+  try { args = JSON.parse(`{${m[2].replace(/\}[^}]*$/, '')}}`); } catch {
+    // Cut short: the "key": "value" pairs that made it.
+    for (const [, k, v] of t.matchAll(/"(\w+)"\s*:\s*"([^"]*)"/g)) args[k] = v;
+  }
+  const delegate = `delegate_to_${agent}`;
+  const words = String(args.heard || args.task || args.query || '').trim();
+  const named = m && lfmTools(agent, { calendar, search }).some((x) => x.name === m[1]) ? m[1] : null;
+  const want = intentOf(words, agent, { calendar, search });
+  const name = named || (want?.direct ? want.tool : args.task ? delegate : args.query ? (search ? 'search_web' : delegate) : null);
+  if (!name) return null;
+  if (name === delegate && !args.task) args.task = want?.lookup ? lookupTask(words) : words;
+  if (name === 'search_web' && !args.query) args.query = words;
+  return { type: 'function_call', name, arguments: JSON.stringify(args), call_id: null };
 }
 
 /** Delegations that are really a phone action, a price or the weather (rerouteFor, from the task). */
@@ -318,6 +394,10 @@ export class LFMRealtimeProvider {
     this.modelGetter = options.model || (() => process.env.LFM_MODEL || DEFAULT_LFM_MODEL);
     this.WebSocketImpl = options.WebSocketImpl || WebSocket;
     this.search = options.search || webSearch;
+    // Whether search_web can run (webSearch needs a Gemini or OpenAI key, which LFM users often
+    // don't have): without it, look-ups go to the agent, which has the internet.
+    this.canSearch = options.canSearch || (options.search ? () => true : () => webSearchAvailable());
+    this.searchOn = true; // this session's choice (its tools and rules)
     this.broadcast = options.broadcast || (() => {});
     this.broadcastAudioChunk = options.broadcastAudioChunk || (() => {});
     this.broadcastLog = options.broadcastLog || (() => {});
@@ -361,6 +441,10 @@ export class LFMRealtimeProvider {
     this.next = null; // 'decide' | 'speak' — asked for while a response was running
     this.responseTimer = null;
     this.cancelled = false;
+    this.plainAnswer = false;
+    this.decideText = ''; // a plain answer's text in a decision (onDecideText)
+    this.callInSpeech = false; // the spoken answer is a tool call written as text (onWords)
+    this.callsInSpeech = 0; // such calls run this turn
     this.speaking = false;
     this.playing = null;
 
@@ -444,6 +528,7 @@ export class LFMRealtimeProvider {
 
   endUtterance() {
     this.redirected = false;
+    this.callsInSpeech = 0;
     const voiced = this.utteranceMs - this.silenceMs;
     this.speechActive = false;
     this.silenceMs = 0;
@@ -558,18 +643,19 @@ export class LFMRealtimeProvider {
       this.connecting = false;
       this.responding = null;
       this.next = null;
+      this.searchOn = !!this.canSearch();
       this.send({
         type: 'session.update',
         session: {
           type: 'realtime',
           model: this.modelGetter(),
-          instructions: lfmInstructions(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null }),
+          instructions: lfmInstructions(this.targetAgent, reconnect ? this.history : [], { calendar: this.calendar?.prompt() || null, search: this.searchOn }),
           output_modalities: ['text'],
           audio: {
             input: { format: { type: 'audio/pcm', rate: 16000 } },
             output: { format: { type: 'audio/pcm', rate: 24000 } },
           },
-          tools: lfmTools(this.targetAgent, { calendar: !!this.calendar }),
+          tools: lfmTools(this.targetAgent, { calendar: !!this.calendar, search: this.searchOn }),
           tool_choice: 'auto',
         },
       });
@@ -638,10 +724,11 @@ export class LFMRealtimeProvider {
         break;
 
       case 'response.output_item.added':
-        // A plain answer in a decision (no tool): stop it, it has no audio.
+        // A plain answer in a decision (no tool): read its start (see onDecideText), then stop
+        // it, it has no audio.
         if (this.responding === 'decide' && event.item?.type === 'message' && !this.cancelled) {
           this.plainAnswer = true;
-          this.cancel();
+          this.decideText = '';
         }
         break;
 
@@ -654,6 +741,7 @@ export class LFMRealtimeProvider {
       case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
         if (this.responding === 'speak') this.onWords(event.delta || '');
+        else if (this.responding === 'decide' && this.plainAnswer) this.onDecideText(event.delta || '');
         break;
 
       case 'response.done':
@@ -672,13 +760,27 @@ export class LFMRealtimeProvider {
     }
   }
 
+  /** A plain answer's text in a decision: an ordinary answer is stopped at the end of a sentence once it reads as one. */
+  onDecideText(delta) {
+    this.decideText += delta;
+    const t = this.decideText;
+    if (!this.cancelled && t.length >= PLAIN_PEEK_CHARS && /[.!?]\s*$/.test(t) && !t.includes('{') && !NO_INTERNET.test(t)) this.cancel();
+  }
+
   onWords(delta) {
     const text = spokenText(this.jarvisSpeech.add(delta));
-    if (text) this.broadcast({ type: 'voice_transcript', text, role: 'assistant', is_final: false });
+    // A tool call written into the spoken answer ('delegate_to_agy {"task": …}', seen live) is
+    // not said out loud: its audio is dropped and the call runs when the answer ends.
+    if (!this.callInSpeech && WRITTEN_CALL.test(text)) {
+      this.callInSpeech = true;
+      this.broadcast({ type: 'gemini_live_interrupt' });
+      this.playing = null;
+    }
+    if (text && !this.callInSpeech) this.broadcast({ type: 'voice_transcript', text, role: 'assistant', is_final: false });
   }
 
   onAudio(event) {
-    if (!event.delta) return;
+    if (!event.delta || this.callInSpeech) return;
     this.active();
     if (!this.speaking) {
       this.speaking = true;
@@ -723,6 +825,7 @@ export class LFMRealtimeProvider {
     this.responding = null;
     this.next = null;
     this.cancelled = false;
+    this.callInSpeech = false;
     if (this.speaking) {
       this.speaking = false;
       this.broadcast({ type: 'agent_status', agentId: this.targetAgent, status: 'IDLE', voice: true });
@@ -749,6 +852,7 @@ export class LFMRealtimeProvider {
     this.responding = phase;
     this.cancelled = false;
     this.plainAnswer = false;
+    this.decideText = '';
     clearTimeout(this.responseTimer);
     // No response.done (an error, a dropped event): don't stay "busy" forever.
     this.responseTimer = setTimeout(() => this.forSpeaker(() => this.onResponseDone({ status: 'timeout' })), RESPONSE_START_MS);
@@ -760,12 +864,27 @@ export class LFMRealtimeProvider {
     const phase = this.responding;
     const cancelled = this.cancelled || response.status === 'cancelled';
     const plainAnswer = this.plainAnswer;
+    const plainText = this.decideText || '';
     this.responding = null;
     this.cancelled = false;
     this.plainAnswer = false;
+    this.decideText = '';
     const output = response.output || [];
 
-    if (phase === 'speak') {
+    if (phase === 'speak' && this.callInSpeech) {
+      this.callInSpeech = false;
+      const written = callFromText(spokenText(this.jarvisSpeech.flush()), this.targetAgent, this.routing());
+      if (this.speaking) {
+        this.speaking = false;
+        this.broadcast({ type: 'agent_status', agentId: this.targetAgent, status: 'IDLE', voice: true });
+      }
+      // Once per turn (no loop), and not a "reply" that says nothing.
+      if (written && written.name !== REPLY_TOOL.name && !this.callsInSpeech && !this.next && this.session) {
+        this.callsInSpeech = 1;
+        this.broadcastLog(`[LFM REALTIME] Tool call written in the spoken answer: ${written.name} ${written.arguments}`);
+        return this.runTools([written]);
+      }
+    } else if (phase === 'speak') {
       const said = spokenText(this.jarvisSpeech.flush());
       if (said) {
         this.broadcast({ type: 'voice_transcript', text: said, role: 'assistant', is_final: true });
@@ -782,9 +901,28 @@ export class LFMRealtimeProvider {
     if (phase === 'decide' && queued !== 'decide') {
       const calls = output.filter((o) => o.type === 'function_call');
       if (calls.length && !cancelled) return this.runTools(calls);
-      // A plain answer (stopped above): it can only be spoken after a new item.
+      if (plainAnswer && !calls.length && this.session && !this.speechActive) {
+        // A tool call written as text: it runs. "I can't access the internet": once per turn, the
+        // model decides again, reminded that it can.
+        const written = callFromText(plainText, this.targetAgent, this.routing());
+        if (written) {
+          this.broadcastLog(`[LFM REALTIME] Tool call written as text: ${written.name} ${written.arguments}`);
+          return this.runTools([written]);
+        }
+        if (!this.redirected && (NO_INTERNET.test(plainText) || plainText.includes('{'))) {
+          this.redirected = true;
+          this.broadcastLog(`[LFM REALTIME] Plain answer instead of a tool: "${plainText.slice(0, 120)}" — deciding again`);
+          const lookup = this.searchOn ? 'search_web' : `delegate_to_${this.targetAgent}`;
+          this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `(You can reach the internet: for anything to look up, call ${lookup} with my request. Call one tool now.)` }] } });
+          return this.start('decide');
+        }
+      }
+      // A plain answer (stopped above): it can only be spoken after a new item. Its words go
+      // with it: told only "say your answer", the 2B model said one of the rules' examples, and
+      // "say your answer: …" made a short one say something else.
       if ((plainAnswer || output.some((o) => o.type === 'message')) && this.session) {
-        this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '(Say your answer out loud.)' }] } });
+        const answer = spokenText(plainText).replace(/\s+/g, ' ').trim();
+        this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: answer ? `(Repeat your answer out loud, word for word: "${answer}")` : '(Say your answer out loud.)' }] } });
         return this.start('speak');
       }
     }
@@ -800,13 +938,25 @@ export class LFMRealtimeProvider {
     const outputs = await Promise.all(calls.map(async (call) => {
       let args = {};
       try { args = JSON.parse(call.arguments || '{}'); } catch {}
-      const name = call.name;
+      let name = call.name;
       let output;
+      const delegate = `delegate_to_${this.targetAgent}`;
+      const want = this.redirected ? null : rerouteFor(name, args, this.targetAgent, this.routing());
 
-      if (!this.redirected && rerouteFor(name, args, this.targetAgent, { calendar: !!this.calendar })) {
+      if (want?.direct) {
+        // A look-up (news, a search, a price…) or an agent the user named: it runs now with the
+        // user's words. Asking the 2B model again only gave "I can't access the internet".
+        const words = String(args.heard || args.query || args.task || '');
+        this.redirected = true;
+        this.turnHeard = String(args.heard || '');
+        this.broadcastLog(`[LFM REALTIME] ${name} → ${want.tool} (${want.hint}): "${words}"`);
+        args = want.tool === 'search_web' ? { heard: args.heard, query: args.query || words } : { heard: args.heard, task: want.lookup ? lookupTask(words) : words };
+        name = want.tool;
+      }
+
+      if (want && !want.direct) {
         // The user's words clearly ask for another tool (a timer, a price, the weather…): once
         // per turn, the model chooses again with that tool named, before anything runs.
-        const want = rerouteFor(name, args, this.targetAgent, { calendar: !!this.calendar });
         this.redirected = true;
         this.turnHeard = String(args.heard || '');
         redecide = true;
@@ -814,35 +964,18 @@ export class LFMRealtimeProvider {
         output = { error: `Wrong tool: this is ${want.hint}. Call ${want.tool} for it now.` };
       } else if (name === REPLY_TOOL.name) {
         output = { ok: true, note: 'Answer the user now, out loud, in one or two short sentences.' };
-      } else if (name === `delegate_to_${this.targetAgent}` && this.repeatOf(String(args.task || ''))) {
+      } else if (name === delegate && this.repeatOf(String(args.task || ''))) {
         const prev = this.repeatOf(String(args.task || ''));
         this.broadcastLog(`[LFM REALTIME] Not delegating again (asked ${Math.round((Date.now() - prev.at) / 1000)} s ago): ${args.task}`);
         output = prev.result == null
           ? { status: 'already_running', note: 'This task is already running. Tell the user you are still on it; the answer arrives as a message.' }
           : { status: 'just_finished', result: String(prev.result).slice(0, 1500), note: 'This task just ran. Tell the user its result; do not run it again unless they ask again.' };
-      } else if (name === `delegate_to_${this.targetAgent}`) {
-        const task = String(args.task || '');
-        const entry = { task, at: Date.now(), result: null };
-        this.recentTasks.push(entry);
-        this.broadcastLog(`[LFM REALTIME] Delegating to ${this.targetAgent.toUpperCase()}: ${task}`);
-        this.delegations += 1;
-        (async () => {
-          let raw;
-          try {
-            raw = await this.delegateToAgent(task, this.targetAgent, true);
-          } catch (e) {
-            raw = `The agent failed: ${e.message}`;
-          }
-          this.delegations -= 1;
-          entry.result = raw || 'Done.';
-          const text = raw && raw.length > 5000 ? `${raw.substring(0, 5000)}... [TRUNCATED DUE TO LENGTH]` : raw;
-          await sent;
-          this.forSpeaker(() => this.deliverResult(task, text));
-        })();
-        output = { status: 'started', note: 'Running in the background. Tell the user in one short sentence that you are on it. The answer arrives later as a message; do not claim it is finished.' };
+      } else if (name === delegate) {
+        output = this.startDelegation(String(args.task || ''), sent);
       } else {
         // After a reroute the model often shortens "heard": the first call's words are better.
-        args = repairArgs(name, { ...args, heard: this.redirected && this.turnHeard ? this.turnHeard : args.heard });
+        const heard = String((this.redirected && this.turnHeard) || args.heard || '');
+        args = repairArgs(name, { ...args, heard });
         if (name === 'calendar_delete_event' && args.confirmed === true) {
           // The 2B model says confirmed=true on the first ask: only after the user was asked.
           const asked = this.pendingDelete && Date.now() - this.pendingDelete.at < 120_000 && sameTask(this.pendingDelete.event, args.event);
@@ -850,11 +983,20 @@ export class LFMRealtimeProvider {
         }
         if (name === 'calendar_delete_event' && args.confirmed !== true) this.pendingDelete = { event: String(args.event || ''), at: Date.now() };
         try {
-          if (name === 'search_web') output = { result: await this.search(args.query) };
+          if (name === 'search_web') output = await this.lookUp(String(args.query || heard), heard, sent);
           else if (name === PHONE_ACTION_TOOL.name) output = { result: this.phoneBridge ? await this.phoneBridge.run(args) : 'Phone actions not available.' };
           else if (name === BUSINESS_TOOL.name) output = { result: this.business ? this.business.show({ focus: args.name || undefined }).spoken : 'The business dashboard is not available.' };
-          else if (name === SHOW_CARD_TOOL.name) output = { result: (await this.showCard(args, { broadcast: this.broadcast })).result };
-          else if (this.calendar?.isTool(name)) output = { result: await this.calendar.runTool(name, args) };
+          else if (name === SHOW_CARD_TOOL.name) {
+            const card = await this.showCard(args, { broadcast: this.broadcast });
+            // No real data for the card (a place or a ticker it couldn't find): the agent looks it up.
+            const words = heard || [args.place, args.assetName || args.symbol, args.teamA, args.flightNumber].filter(Boolean).join(' ');
+            if (card.shown === false && words) {
+              this.broadcastLog(`[LFM REALTIME] No ${args.kind || ''} card for "${words}": asking ${this.targetAgent.toUpperCase()}`);
+              output = this.startDelegation(lookupTask(words), sent);
+            } else {
+              output = { result: card.result };
+            }
+          } else if (this.calendar?.isTool(name)) output = { result: await this.calendar.runTool(name, args) };
           else output = { error: `Unknown tool ${name}` };
         } catch (e) {
           output = { error: `${name} failed: ${e.message}` };
@@ -865,15 +1007,64 @@ export class LFMRealtimeProvider {
 
     if (!this.session) return outputsSent();
     for (const { call, output } of outputs) {
-      if (this.session === session) {
+      if (this.session === session && call.call_id) {
         this.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(output) } });
       } else {
-        // A reconnect in between: the call isn't in this session, so the result goes in as text.
-        this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `(Result of ${call.name}) ${JSON.stringify(output)}` }] } });
+        // A reconnect in between (the call isn't in this session) or a tool Jarvis ran itself
+        // (sendUserText, a call written as text): the result goes in as text, with the user's
+        // words (without them the 2B model answered something else).
+        let heard = '';
+        try { heard = String(JSON.parse(call.arguments || '{}').heard || ''); } catch {}
+        this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `(Result of ${call.name}${heard ? ` for "${heard}"` : ''}) ${JSON.stringify(output)}` }] } });
       }
     }
     this.request(redecide ? 'decide' : 'speak');
     outputsSent();
+  }
+
+  /** Routing options for this session (rerouteFor / intentOf). */
+  routing() {
+    return { calendar: !!this.calendar, search: this.searchOn !== false };
+  }
+
+  /**
+   * Starts an agent task in the background: the tool output says to acknowledge it out loud now;
+   * the answer is spoken when it comes (deliverResult), after `sent` (the tool outputs are in).
+   */
+  startDelegation(task, sent = Promise.resolve()) {
+    const entry = { task, at: Date.now(), result: null };
+    this.recentTasks.push(entry);
+    this.broadcastLog(`[LFM REALTIME] Delegating to ${this.targetAgent.toUpperCase()}: ${task}`);
+    this.delegations += 1;
+    (async () => {
+      let raw;
+      try {
+        raw = await this.delegateToAgent(task, this.targetAgent, true);
+      } catch (e) {
+        raw = `The agent failed: ${e.message}`;
+      }
+      this.delegations -= 1;
+      entry.result = raw || 'Done.';
+      const text = raw && raw.length > 5000 ? `${raw.substring(0, 5000)}... [TRUNCATED DUE TO LENGTH]` : raw;
+      await sent;
+      this.forSpeaker(() => this.deliverResult(task, text));
+    })();
+    return { status: 'started', note: 'Running in the background. Tell the user in one short sentence that you are on it, like "Let me check that." Never say you cannot access the internet. The answer arrives later as a message; do not claim it is finished.' };
+  }
+
+  /** A web look-up: search_web when this computer can search, else (or when it fails) the agent. */
+  async lookUp(query, heard, sent) {
+    if (this.searchOn && this.canSearch()) {
+      try {
+        return { result: await this.search(query) };
+      } catch (e) {
+        this.broadcastLog(`[LFM REALTIME] Web search failed (${e.message}): asking ${this.targetAgent.toUpperCase()}`);
+      }
+    }
+    const task = lookupTask(heard || query);
+    const prev = this.repeatOf(task);
+    if (prev) return prev.result == null ? { status: 'already_running', note: 'This is already being looked up. Tell the user you are still on it.' } : { result: String(prev.result).slice(0, 1500) };
+    return this.startDelegation(task, sent);
   }
 
   deliverResult(task, resultText) {
@@ -884,7 +1075,7 @@ export class LFMRealtimeProvider {
     }
     this.send({
       type: 'conversation.item.create',
-      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `(Agent result) The task "${task}" is finished. Agent answer:\n${resultText || 'Done.'}` }] },
+      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `(Agent result) The task "${task.replace(/^Look this up on the web and answer in two or three short sentences: /, '')}" is finished. Tell the user this answer now, briefly, with its facts:\n${resultText || 'Done.'}` }] },
     });
     this.request('speak');
   }
@@ -893,9 +1084,20 @@ export class LFMRealtimeProvider {
     if (!this.session) return false;
     this.active();
     this.redirected = false;
+    this.callsInSpeech = 0;
     if (this.responding || this.audioPlaying()) this.interrupt();
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
     this.remember('user', text);
+    // The words alone say it's a look-up or a task for the agent: no decision needed.
+    const want = intentOf(text, this.targetAgent, this.routing());
+    if (want?.direct) {
+      this.redirected = true;
+      this.turnHeard = text;
+      const args = want.tool === 'search_web' ? { heard: text, query: text } : { heard: text, task: want.lookup ? lookupTask(text) : text };
+      this.broadcastLog(`[LFM REALTIME] ${want.tool} (${want.hint}): "${text}"`);
+      this.runTools([{ type: 'function_call', name: want.tool, arguments: JSON.stringify(args), call_id: null }]);
+      return true;
+    }
     this.request('decide');
     return true;
   }

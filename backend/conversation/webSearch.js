@@ -8,6 +8,11 @@ const TIMEOUT_MS = 20_000;
 
 const prompt = (query) => `Search the web and answer for a voice assistant, in 1-3 short sentences, with the facts that matter (numbers with units, place, date, source name). Today is ${new Date().toDateString()}.\n\nQuestion: ${query}`;
 
+/** Whether webSearch can run here: it needs a Gemini or an OpenAI key (LFM users often have neither). */
+export function webSearchAvailable({ geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY, openaiKey = process.env.OPENAI_API_KEY } = {}) {
+  return !!(geminiKey || openaiKey);
+}
+
 /** The answer to `query` as plain text; throws when no search is available or it fails. */
 export async function webSearch(query, { geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY, openaiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch } = {}) {
   const q = String(query || '').trim().slice(0, 500);

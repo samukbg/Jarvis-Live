@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { webSearch } from './webSearch.js';
+import { webSearch, webSearchAvailable } from './webSearch.js';
 
 const reply = (body, ok = true, status = 200) => ({ ok, status, json: async () => body });
 
@@ -32,4 +32,10 @@ test('errors are explained; no key, no search', async () => {
   await assert.rejects(webSearch('x', { geminiKey: '', openaiKey: '' }), /No web search available/);
   await assert.rejects(webSearch('x', { geminiKey: 'g', fetchImpl: async () => reply({ error: { message: 'API key not valid' } }, false, 400) }), /API key not valid/);
   await assert.rejects(webSearch('  ', { geminiKey: 'g' }), /Nothing to search/);
+});
+
+test('webSearchAvailable: only with a Gemini or OpenAI key (LFM look-ups go to the agent without one)', () => {
+  assert.equal(webSearchAvailable({ geminiKey: '', openaiKey: '' }), false);
+  assert.equal(webSearchAvailable({ geminiKey: 'g', openaiKey: '' }), true);
+  assert.equal(webSearchAvailable({ geminiKey: undefined, openaiKey: 'o' }), true);
 });
