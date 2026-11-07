@@ -265,8 +265,8 @@ export class GeminiLiveProvider {
               }
             }
 
-            if (message.toolCall) {
-              const fc = message.toolCall.functionCalls?.[0];
+            // One message can carry several calls (a card and a delegation): each one is handled.
+            for (const fc of message.toolCall?.functionCalls || []) {
               if (fc && fc.name === PHONE_ACTION_TOOL.name) {
                 // Runs on the phone; Gemini speaks the result.
                 (async () => {
@@ -325,7 +325,7 @@ export class GeminiLiveProvider {
                   }
                 })();
               } else if (fc && fc.name === `delegate_to_${this.targetAgent}`) {
-                const task = fc.args.task;
+                const task = fc.args?.task || '';
                 // Non-blocking: Gemini goes on talking ("I'm on it…") while the agent works. The
                 // written acknowledgement is only a fallback, when it stays silent.
                 setTimeout(() => this.acknowledgeIfSilent(this.targetAgent), ACK_GRACE_MS);
