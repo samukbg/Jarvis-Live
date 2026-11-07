@@ -2855,8 +2855,11 @@ app.post('/api/action/:name', async (req, res) => {
         broadcastLog('[ACTION] Restarting Live Avatar streamer on port 7860...');
         if (process.platform === 'win32') {
           await execAsync('powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -LocalPort 7860 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"').catch(() => {});
+          // A hung streamer that never bound :7860 still holds live_avatar.log, and the new one can't open it.
+          await execAsync('powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq \'python.exe\' -and $_.CommandLine -like \'*run_streamer_windows.py*\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"').catch(() => {});
           const startStreamer = 'cd .. && start /B streamer_win_env\\Scripts\\python.exe live_avatar\\run_streamer_windows.py > live_avatar.log 2>&1';
-          setTimeout(() => execAsync(startStreamer), 1500);
+          // An unhandled rejection here would take the whole backend down.
+          setTimeout(() => execAsync(startStreamer).catch((e) => broadcastLog(`[ACTION] Streamer restart failed: ${String(e.stderr || e.message).trim()}`)), 1500);
         } else {
           await execAsync('pkill -f run_streamer || true').catch(() => {});
         }
