@@ -100,6 +100,27 @@ Jarvis **auto-detects** which agent CLIs are installed, lists their models, rout
 <img src="docs/screenshots/settings.png" alt="Jarvis Live settings: language, live avatar picker, your own server URL and API key, optional integrations" width="70%">
 </div>
 
+## 📱 Mobile apps: iPhone, Apple Watch and Android
+
+Jarvis goes with you. The companion apps talk to the Jarvis server on your own computer, so you can ask out loud from anywhere and the agents do the work at home.
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-ios.jpg" alt="Jarvis Live on iPhone: the voice orb listening, the live transcript and the AI agents working on the computer" width="240"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-watch.jpg" alt="Jarvis Live on Apple Watch: tap the orb to talk to Jarvis from your wrist" width="240"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-android.jpg" alt="Jarvis Live on Android: the first-launch setup guide with the voice orb" width="240"></td>
+</tr>
+<tr>
+<td align="center"><b>iPhone</b><br>Voice orb or live avatar, agents and their results, the neural map, screen and camera vision.</td>
+<td align="center"><b>Apple Watch</b><br>Tap and talk from your wrist. Answers are spoken, with the orb or the avatar on screen.</td>
+<td align="center"><b>Android</b><br>The same app: voice, avatar, agents, and hands-free "Hey Jarvis".</td>
+</tr>
+</table>
+
+- **One assistant everywhere**: the phone and the watch reach the same server, agents and memory as the web client.
+- **Reach your computer from anywhere** through your own server URL, or with a [Jarvis Cloud](https://jarvis-live.xyz) account and no network setup.
+- **Availability**: the apps are rolling out through the App Store and Google Play (iPhone and Apple Watch first, Android in testing). See [jarvis-live.xyz](https://jarvis-live.xyz) for the current links. The apps themselves are not part of this repository.
+
 ## 🏗 Architecture
 
 ```mermaid
